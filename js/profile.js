@@ -213,13 +213,17 @@ export function mountPartnerProfileCard(){
 
   // función para limpiar UI
   const clearUI = () => {
-    $('pp-name').innerHTML   = `<b>Nombre:</b> —`;
-    $('pp-uni').innerHTML    = `<b>Universidad:</b> —`;
-    $('pp-career').innerHTML = `<b>Carrera:</b> —`;
-    $('pp-bday').innerHTML   = `<b>Cumpleaños:</b> —`;
-    $('pp-color-code').textContent = '—';
-    const sw = $('pp-color-swatch'); if (sw) sw.style.background = '#ff69b4';
-  };
+  $('pp-name').innerHTML   = `<b>Nombre:</b> —`;
+  $('pp-uni').innerHTML    = `<b>Universidad:</b> —`;
+  $('pp-career').innerHTML = `<b>Carrera:</b> —`;
+  $('pp-bday').innerHTML   = `<b>Cumpleaños:</b> —`;
+  $('pp-color-code').textContent = '—';
+  const sw = $('pp-color-swatch');
+  if (sw) {
+    sw.style.background = 'transparent'; // ⬅️ deja el fondo transparente
+    sw.style.border = '1px solid rgba(255,255,255,.25)'; // conserva el borde
+  }
+};
 
   // corta suscripción previa si existe
   if (unsubPartner) { unsubPartner(); unsubPartner = null; }
