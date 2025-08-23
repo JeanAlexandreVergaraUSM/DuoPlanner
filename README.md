@@ -14,9 +14,3 @@ Permite gestionar semestres, ramos, notas, horarios y malla curricular, mostrand
 - **HTML5, CSS3, JavaScript (ESM)**  
 - **Firebase Authentication & Firestore**  
 - Diseño responsivo y ligero, pensado para usarse en el navegador.
-
-## 🚀 Instalación y uso
-1. Clona este repositorio:
-   ```bash
-   git clone https://github.com/tuusuario/duoplanner.git
-   cd duoplanner
