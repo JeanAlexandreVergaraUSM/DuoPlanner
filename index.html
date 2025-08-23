@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DuoPlanner</title>
+  <link rel="stylesheet" href="css/styles.css"/>
+</head>
+<body>
+  <header>
+    <div class="brand">DuoPlanner</div>
+    <div class="nav">
+      <button class="tab" data-route="#/perfil">Perfil</button>
+      <button class="tab" data-route="#/semestres">Semestres</button>
+      <button class="tab" data-route="#/horario">Horario</button>
+      <button class="tab" data-route="#/notas">Notas</button>
+      <button class="tab" data-route="#/malla">Malla</button>
+      <div class="row" style="margin-left:12px">
+        <button id="signInBtn" class="primary">Iniciar sesión</button>
+        <div id="userBadge" class="pill" style="display:none">
+          <span id="userName">—</span>
+          <button id="signOutBtn">Salir</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- PERFIL -->
+    <section id="page-perfil" class="page card">
+      <div class="profile-card">
+        <h2 class="section-title">Perfil</h2>
+        <div class="form-grid">
+          <div class="field">
+            <label for="pfName">Nombre</label>
+            <input id="pfName" type="text" placeholder="Tu nombre"/>
+          </div>
+          <div class="field">
+            <label for="pfBirthday">Fecha de cumpleaños</label>
+            <input id="pfBirthday" type="date"/>
+            <div id="pfAgeHint" class="muted">Edad: —</div>
+          </div>
+          <div class="field">
+            <label for="pfUniversity">Universidad</label>
+            <select id="pfUniversity">
+              <option value="">Selecciona…</option>
+              <option value="UMAYOR">Universidad Mayor</option>
+              <option value="USM">UTFSM</option>
+              <option value="OTRA">Otra…</option>
+            </select>
+          </div>
+          <div id="pfCustomUniWrap" class="field hidden">
+            <label for="pfCustomUniversity">Nombre de tu universidad</label>
+            <input id="pfCustomUniversity" type="text" placeholder="Escribe el nombre…"/>
+          </div>
+          <div class="field">
+            <label for="pfCareer">Carrera</label>
+            <select id="pfCareer" disabled>
+              <option value="">Selecciona tu carrera…</option>
+            </select>
+            <div class="muted">Se usará para la malla interactiva.</div>
+          </div>
+          <div class="field">
+            <label for="pfFavoriteColor">Color favorito</label>
+            <div class="color-picker">
+              <input id="pfFavoriteColor" type="color" value="#22c55e"/>
+              <span class="color-chip">
+                <span id="pfColorPreview" style="width:14px;height:14px;border-radius:4px;background:#22c55e;border:1px solid rgba(255,255,255,.25)"></span>
+                <span id="pfColorCode">#22C55E</span>
+              </span>
+              <span class="muted">Se usará para pintar tus ramos en vistas compartidas.</span>
+            </div>
+          </div>
+        </div>
+        <div class="actions"><button id="pfSaveBtn" class="primary">Guardar perfil</button></div>
+      </div>
+      <!-- La tarjeta de la pareja la monta profile.js -->
+    </section>
+
+    <!-- SEMESTRES -->
+    <section id="page-semestres" class="page card hidden">
+      <h2>Semestres & Ramos</h2>
+      <div class="row">
+        <div class="card" style="flex:1 1 360px">
+          <h3 style="margin-top:0">Emparejar cuentas (Party)</h3>
+          <p class="muted">Crea una <b>party</b> y comparte el <b>ID</b> con tu pareja.</p>
+          <div class="row">
+            <button id="createPairBtn" disabled>Crear Party</button>
+            <button id="copyInviteBtn" disabled>Copiar ID</button>
+            <button id="deletePairBtn" class="ghost">Eliminar Party</button>
+          </div>
+          <p class="muted">ID de party: <code id="pairId">—</code></p>
+          <p class="muted">¿Tienes un ID? <button id="joinByCodeBtn" class="ghost">Unirme</button> → <input id="joinCode" placeholder="Pega el ID o el link" size="18"/></p>
+        </div>
+
+        <div class="card" style="flex:1 1 640px">
+          <h3 style="margin-top:0">Mis semestres</h3>
+          <div id="semNoticeNoUni" class="muted hidden">Primero completa tu <b>universidad</b> en <b>Perfil</b>.</div>
+          <div class="row" style="align-items:flex-end">
+            <div><label>Universidad (Perfil)</label><br/><input id="semesterUniFromProfile" disabled placeholder="—"/></div>
+            <div><label>Semestre</label><br/><input id="semesterLabel" placeholder="2025-2" size="10" disabled/></div>
+            <button id="createSemesterBtn" class="primary" disabled>Crear semestre</button>
+          </div>
+          <div id="semestersList" class="list" style="margin-top:10px"></div>
+          <div id="activeSemesterBox" class="muted" style="margin-top:10px"><b>Semestre activo:</b> <span id="activeSemesterLabel">—</span> · <span id="activeSemesterUni">—</span></div>
+
+          <div id="coursesSection" class="card hidden" style="margin-top:16px">
+            <h3 style="margin:0 0 6px">Ramos del semestre</h3>
+            <div class="grid-3">
+              <div><label>Nombre del ramo</label><br/><input id="courseName" placeholder="Ej: Fisiología II"/></div>
+              <div><label>Código (opcional)</label><br/><input id="courseCode" placeholder="Ej: MED-204"/></div>
+              <div><label>Profesor</label><br/><input id="courseProfessor" placeholder="Nombre del profesor/a"/></div>
+            </div>
+            <div class="grid-3" style="margin-top:10px">
+              <div><label id="sectParLabel">Sección</label><br/><input id="courseSectPar" placeholder="Ej: 1"/></div>
+              <div>
+                <label>Escala</label><br/>
+                <select id="courseScale">
+                  <option value="MAYOR">1–7 (UMayor)</option>
+                  <option value="USM">0–100 (USM)</option>
+                </select>
+                <div id="scaleHint" class="muted" style="font-size:12px;margin-top:4px">Se define por la universidad del semestre.</div>
+              </div>
+              <div style="display:flex;align-items:flex-end;gap:8px">
+                <button id="saveCourseBtn" class="primary">Agregar ramo</button>
+                <button id="cancelEditBtn" class="ghost hidden">Cancelar</button>
+              </div>
+            </div>
+            <div id="coursesList" class="list" style="margin-top:14px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HORARIO -->
+    <section id="page-horario" class="page card hidden">
+      <h2>Horario</h2>
+      <div class="subtabs">
+        <button id="subtabPropio" class="subtab active" data-sub="propio">Propio</button>
+        <button id="subtabCompartido" class="subtab" data-sub="compartido" aria-disabled="true" title="Necesitas estar emparejado">Pareja</button>
+      </div>
+      <div id="horarioPropio" class="subpage"><div class="muted">Constructor de horario (próximo paso).</div></div>
+      <div id="horarioCompartido" class="subpage overlay-disabled disabled hidden"><div class="muted">Vista combinada (se habilita con Pair).</div></div>
+    </section>
+
+    <!-- NOTAS -->
+    <section id="page-notas" class="page card hidden">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0">Notas</h2>
+        <button id="gr-openPartnerBtn" class="primary">Notas de tu pareja</button>
+      </div>
+
+      <!-- Panel: Notas de tu pareja (solo lectura) -->
+      <div id="grPartnerPanel" class="card hidden" style="margin-bottom:12px">
+        <div class="row" style="gap:12px;align-items:flex-end">
+          <div><label for="grp-semSel">Semestre</label><br/><select id="grp-semSel"></select></div>
+          <div><label for="grp-courseSel">Ramo</label><br/><select id="grp-courseSel"></select></div>
+          <div style="flex:1"></div>
+          <button id="gr-closePartnerBtn" class="ghost">Cerrar</button>
+        </div>
+        <div id="grp-meta" class="muted" style="margin-top:10px">Selecciona semestre y ramo para ver su cálculo.</div>
+        <div style="margin-top:12px">
+          <h3 style="margin:0 0 6px">Componentes</h3>
+          <div id="grp-components" class="muted">Sin componentes…</div>
+        </div>
+        <div style="margin-top:12px">
+          <h3 style="margin:0 0 6px">Expresión de nota final</h3>
+          <code id="grp-finalExpr" style="display:block;word-break:break-all">—</code>
+        </div>
+        <div style="margin-top:12px">
+          <h3 style="margin:0 0 6px">Reglas</h3>
+          <div id="grp-rules" class="muted">Sin reglas definidas…</div>
+        </div>
+      </div>
+
+      <!-- Tu editor de notas (propio) -->
+      <div class="row" style="align-items:flex-end">
+        <div><label>Semestre activo</label><br/><span id="gr-activeSemLabel" class="pill muted">—</span></div>
+        <div><label>Ramo</label><br/><select id="gr-courseSel"></select></div>
+        <div>
+          <label>Escala</label><br/>
+          <select id="gr-scaleSel" disabled>
+            <option value="USM">USM (0–100)</option>
+            <option value="MAYOR">UMayor (1–7)</option>
+          </select>
+        </div>
+        <div><label>Umbral aprobación</label><br/><input id="gr-passThreshold" type="number" step="0.01" style="width:110px"/></div>
+        <div><button id="gr-saveHeader" class="primary">Guardar cabecera</button></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h3 style="margin:0">Componentes</h3>
+          <div class="row"><button id="gr-addComp" class="primary">+ Componente</button></div>
+        </div>
+        <div id="gr-components" class="gr-table" aria-live="polite"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin-top:0">Expresión de nota final</h3>
+        <div class="row">
+          <input id="gr-finalExpr" placeholder="Ej: 0.35*cert1 + 0.35*cert2 + 0.30*ctrl1" style="flex:1 1 420px"/>
+          <button id="gr-saveExpr" class="primary">Guardar fórmula</button>
+        </div>
+        <div class="muted" style="margin-top:6px">
+          Usa las <b>claves</b> de los componentes creados (p. ej. <code>cert1</code>, <code>cert2</code>, <code>ctrl1</code>, <code>lab1</code>) y operadores <code>+ - * / ( )</code>.
+          La fórmula se evalúa en la escala del ramo (0–100 USM o 1–7 UMayor).
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin:0 0 6px">Resultado</h3>
+        <div class="gr-result">
+          <div><b>Nota actual:</b> <span id="gr-currentFinal">—</span></div>
+          <div><b>Estado:</b> <span id="gr-status">—</span></div>
+          <div><b>Necesitas:</b> <span id="gr-needed">—</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MALLA -->
+    <section id="page-malla" class="page card hidden">
+      <h2>Malla</h2>
+      <div id="malla-host"></div>
+    </section>
+  </div>
+
+  <!-- Entrypoints -->
+  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/malla.js"></script>
+</body>
+</html>
