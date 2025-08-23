@@ -1,0 +1,83 @@
+Código Asignatura;Sigla;Asignatura;Nivel;Créditos;Número;Prerrequisito 01 (Código);Prerrequisito 02 (Código);Prerrequisito 03 (Código);Área
+
+MAT-021;MAT-021;Matemáticas I;I;8;1;;;;Ciencias Básicas
+IWG-101;IWG-101;Introducción a la Ingeniería;I;3;2;;;;Transversal e Integración
+FIS-100;FIS-100;Introducción a la Física;I;6;3;;;;Física
+TEL-101;TEL-101;Iniciación a la Programación;I;5;4;;;;Software
+HRW-101;HRW-101;Humanístico I;I;3;5;;;;Formación General
+DEW-100;DEW-100;Educación Física I;I;2;6;;;;Deportes
+
+MAT-022;MAT-022;Matemáticas II;II;7;7;1;;;Ciencias Básicas
+HFW-144;HFW-144;Expresión Oral y Escrita;II;3;8;;;;Formación General
+FIS-110;FIS-110;Física General I;II;8;9;1;3;;Física
+TEL-102;TEL-102;Seminario de Programación;II;5;10;4;;;Software
+HRW-102;HRW-102;Humanístico II;II;3;11;5;;;Formación General
+DEW-010;DEW-010;Educación Física II;II;2;12;6;;;Deportes
+
+MAT-023;MAT-023;Matemáticas III;III;7;13;7;;;Ciencias Básicas
+ELO-320;ELO-320;Estructura de Datos y Algoritmos;III;5;14;10;;;Software
+FIS-120;FIS-120;Física General II;III;8;15;7;9;;Física
+ELO-322;ELO-322;Redes de Computadores;III;5;16;4;;;Redes
+HCW-101;HCW-101;Inglés 1;III;3;17;;;;Inglés
+DEW-110;DEW-110;Deportes;III;2;18;12;;;Deportes
+
+INF-239;INF-239;Bases de Datos;IV;5;19;14;;;Software
+TEL-131;TEL-131;Electrónica Digital;IV;5;20;7;15;;Electrónica
+TEL-132;TEL-132;Laboratorio de Electrónica Digital;IV;5;21; ;;;Electrónica
+ELO-204;ELO-204;Probabilidades y Procesos Aleatorios;IV;7;22;7;;;Ciencias Básicas
+HCW-101;HCW-101;Inglés 2;IV;3;23;17;;;Inglés
+QUI-010;QUI-010;Química y Sociedad;IV;5;24;;;;Ciencias Básicas
+
+INF-236;INF-236;Análisis y Diseño de Software;V;5;25;19;10;;Software
+ELO-329;ELO-329;Diseño y Program. Orientada a Objetos;V;5;26;4;;;Software
+FIS-130;FIS-130;Física General III;V;8;27;7;9;;Física
+TEL-222;TEL-222;Fundamentos de Transmisión de Señales;V;5;28;13;15;;Telecomunicaciones
+TEL-241;TEL-241;Laboratorio de Redes de Computadores;V;5;29;16;;;Redes
+
+
+INF-225;INF-225;Ingeniería de Software;VI;5;30;25;;;Software
+TEL-211;TEL-211;Disponibilidad y Rendimiento de Sistemas TIC;VI;5;31;22;16;;Redes
+ELO-241;ELO-241;Laboratorio de Comunicaciones;VI;5;32;28;21;;Telecomunicaciones
+MAT-024;MAT-024;Matemáticas IV;VI;6;33;13;;;Ciencias Básicas
+TEL-231;TEL-231;Sistemas de Telecomunicaciones;VI;5;34;28;;;Telecomunicaciones
+HCW-102;HCW-102;Inglés 3;VI;3;35;23;;;Inglés
+
+ELO-321;ELO-321;Teoría de Sistemas Operativos;VII;5;36;10;;;Software
+ELO-211;ELO-211;Sistemas Digitales;VII;5;37;20;;;Electrónica
+ELO-212;ELO-212;Laboratorio de Sistemas Digitales;VII;5;38;20;;;Electrónica
+MAT-270;MAT-270;Análisis Numérico;VII;5;39;33;;;Ciencias Básicas
+TEL-360;TEL-360;Pensamiento de Diseño en Ingeniería;VII;5;40;26;;;Formación General
+HCW-200;HCW-200;Inglés 4;VII;3;41;35;;;Inglés
+
+TEL-342;TEL-342;Administración de Redes de Computadores;VIII;4;42;29;;;Redes
+TEL-252;TEL-252;Criptografía y Seguridad de la Información;VIII;5;43;22;20;10;Software
+FIS-140;FIS-140;Física General IV;VIII;8;44;27;15;;Física
+ELO-328;ELO-328;Procesamiento Digital de Imágenes;VIII;5;45;22;26;;Software
+ELO-341;ELO-341;Teoría de Comunicaciones Digitales;VIII;5;46;22;34;;Telecomunicaciones
+HCW-201;HCW-201;Inglés 5;VIII;3;47;41;;;Inglés
+
+TEL-335;TEL-335;Diseño de Aplicaciones Web y Móviles;IX;5;48;26;19;;Software
+TEL-354;TEL-354;Minería de Datos;IX;5;49;22;13;;Software
+TEL-236;TEL-236;Redes de Acceso y Comunicaciones Ópticas;IX;5;50;22;34;;Telecomunicaciones
+TEL-315;TEL-315;Redes Inalámbricas;IX;5;51;16;46;;Redes
+TEL-312;TEL-312;Seguridad en Redes de Computadores;IX;5;52;42;43;;Redes
+TEL-341;TEL-341;Simulación de Redes;IX;5;53;22;14;16;Redes
+
+TEL-329;TEL-329;Redes de Sensores;X;5;54;29;51;;Redes
+TEL-343;TEL-343;Planificación y Dimensionamiento de Redes;X;5;55;22;;;Redes
+TEL-317;TEL-317;Redes Ópticas WDM;X;5;56;22;16;;Redes
+IWN-170;IWN-170;Economía IA;X;5;57;13;;;Industrias  
+TEL-011;TEL-011;Complementario 1;X;5;58;;;;Complementarios
+HCW-202;HCW-202;Inglés 6;X;3;59;47;;;Inglés
+
+ILN-250;ILN-250;Gestión de Investig. de Operaciones;XI;5;60;22;;;Industrias
+IWG-397;IWG-397;Mem. Multid.: Innovación;XI;5;61;;;;Complementarios
+IWG-396;IWG-396;Mem. Multid.: Transversal 1;XI;5;62;;;;Complementarios
+IWG-394;IWG-394;Taller Memoria Multidisciplinaria 1;XI;8;63;;;;Complementarios
+TEL-012;TEL-012;Complementario 2;XI;5;64;;;;Complementarios
+
+ICS-111;ICS-111;Administración de Empresas;XII;5;65;;;;Industrias
+IWG-399;IWG-399;Mem. Multid.: Emprendimiento;XII;5;66;;;;Complementarios
+IWG-398;IWG-398;Mem. Multid.: Transversal 2;XII;5;67;;;;Complementarios
+IWG-395;IWG-395;Taller Memoria Multidisciplinaria 2;XII;8;68;63;;;Complementarios
+TEL-013;TEL-013;Complementario 3;XII;5;69;;;;Complementarios
