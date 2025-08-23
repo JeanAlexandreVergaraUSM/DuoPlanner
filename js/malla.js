@@ -583,8 +583,10 @@ function actualizarDependencias(host){
                   Array.from(host.querySelectorAll('.grid-item')).find(d=> d.querySelector('.sigla-label')?.textContent===String(k));
       return pre && pre.classList.contains('aprobado');
     });
-    if (!ok){ el.classList.add('bloqueado'); el.classList.remove('aprobado'); }
-    else    { el.classList.remove('bloqueado'); }
+    // después: NO borres "aprobado" al recalcular
+if (!ok){ el.classList.add('bloqueado'); }
+else    { el.classList.remove('bloqueado'); }
+
   });
 }
 
@@ -613,10 +615,11 @@ function loadState(host, career){
 
 function updatePercentage(host){
   const total = host.querySelectorAll('.grid-item').length;
-  const aprob  = host.querySelectorAll('.grid-item.aprobado').length;
-  const pct    = total ? Math.round((aprob/total)*100) : 0;
+  const aprob = host.querySelectorAll('.grid-item.aprobado').length;
+  const pct   = total ? ((aprob/total)*100).toFixed(1) : '0.0';
   $('malla-percentage').textContent = `Total de ramos: ${pct}%`;
 }
+
 
 /* ================= Toggle + suscripción a malla de la pareja ================= */
 
