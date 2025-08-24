@@ -63,15 +63,24 @@ function block(label, start, end, linesArr){
 /* === universidad desde texto legible del semestre === */
 function uniCodeFromReadable(readable){
   if (!readable) return '';
-  const r = readable.toLowerCase();
-  if (r.includes('mayor')) return 'UMAYOR';
-  if (r.includes('utfsm') || r.includes('santa maría') || r.includes('santa maria')) return 'USM';
+  const r = String(readable).toLowerCase();
+
+  if (r === 'umayor' || r.includes('mayor')) return 'UMAYOR';
+  if (r === 'usm' || r === 'utfsm' || r.includes('utfsm') || r.includes('santa maría') || r.includes('santa maria')) {
+    return 'USM';
+  }
   return 'OTRA';
 }
+
+
 function getActiveUniCode(){
-  const u = state.activeSemesterData?.universityAtThatTime || '';
+  const u = state.activeSemesterData?.universityAtThatTime
+         || state.profileData?.university
+         || '';
   return uniCodeFromReadable(u);
 }
+
+
 function getMySlots(){
   return (getActiveUniCode()==='UMAYOR') ? MAYOR_SLOTS : USM_SLOTS;
 }
@@ -87,7 +96,13 @@ export function initSchedule(){
 
   // Compartido
   renderSharedShell();
-  document.addEventListener('pair:ready', populateSharedSemesters);
+  document.addEventListener('pair:ready', () => {
+  populateSharedSemesters();
+  // Si ya hay semestre seleccionado de la pareja, engancha el listener
+  if (state.shared.horario.semId) {
+    subscribeShared(state.shared.horario.semId);
+  }
+});
   $('sh-semSel')?.addEventListener('change', (e)=>{
     state.shared.horario.semId = e.target.value || null;
     subscribeShared(state.shared.horario.semId);
