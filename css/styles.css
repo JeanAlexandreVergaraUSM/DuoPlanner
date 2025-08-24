@@ -523,3 +523,5 @@ input[type="color"]::-moz-color-swatch{
 @media (max-width: 920px){
   #page-perfil .form-grid { grid-template-columns: 1fr; }
 }
+
+.hidden { display: none !important; }
