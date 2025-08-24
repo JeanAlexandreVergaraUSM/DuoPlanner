@@ -1,7 +1,7 @@
 // js/malla.js
 import { $, state } from './state.js';
 import { db } from './firebase.js';
-import { doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { doc, setDoc, onSnapshot, getDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 /* ================= Config ================= */
 const CAREER_NAMES = {
@@ -51,6 +51,11 @@ document.addEventListener('profile:changed', () => {
   ensureInit();
 });
 
+// 🔹 Reaccionar inmediatamente cuando se crea / une / elimina la party
+document.addEventListener('pair:ready', () => {
+  ensureMallaLiveAfterPair();
+});
+
 async function initMallaOnRoute(){
   if (location.hash !== '#/malla') return;
   const host = $('malla-host');
@@ -62,11 +67,12 @@ async function initMallaOnRoute(){
     host.dataset.ready = '1';
   }
 
-  // 🔹 Asegura que el switch “Ver malla de mi pareja” aparezca incluso antes del perfil
   setupPartnerToggle?.();
 
-  // Si el perfil aún no llega, no renderizamos tu malla todavía.
-  // Pero si ya está activada la vista de pareja y hay pareja, suscríbete igual.
+  // 🔁 sincroniza el flag con el switch visible (si existe)
+  const cb = $('malla-view-partner');
+  if (cb) state.shared.malla.enabled = !!cb.checked;
+
   if (!state.profileData){
     if (state.shared?.malla?.enabled && state.pairOtherUid){
       watchPartnerMalla();
@@ -74,14 +80,41 @@ async function initMallaOnRoute(){
     return;
   }
 
-  // Perfil ya disponible: pinta según modo vigente
   if (state.shared?.malla?.enabled && state.pairOtherUid) {
     watchPartnerMalla();
   } else {
-    lastRenderedKey = '';      // por si venías de la vista pareja
+    lastRenderedKey = '';
     renderFromProfile();
   }
 }
+
+
+async function ensureMallaLiveAfterPair(){
+  if (location.hash !== '#/malla') return;
+  const host = $('malla-host');
+  if (!host) return;
+
+  // Asegura UI y datasets listos
+  if (!host.dataset.ready){
+    buildShell(host);
+    await ensureDatasetsLoaded();
+    host.dataset.ready = '1';
+  }
+
+  // Asegura que exista el toggle "Ver malla de mi pareja"
+  setupPartnerToggle?.();
+
+  // Si la vista de pareja está activada y ya hay pareja → suscríbete
+  if (state.shared?.malla?.enabled && state.pairOtherUid){
+    watchPartnerMalla();
+  } else {
+    // Si no, vuelve a tu malla normal inmediatamente
+    setPartnerReadonly(false);
+    lastRenderedKey = '';
+    if (state.profileData) renderFromProfile();
+  }
+}
+
 
 /* ================= Helpers: modo pareja/solo‑lectura ================= */
 function isPartnerView(){
@@ -286,7 +319,7 @@ function parseCSV(text){
   return lines.slice(1).map(line=>{
     const cols = line.split(sep).map(c => c.trim().replace(/^["']|["']$/g,''));
     const o = {};
-    headers.forEach((h,i)=> o[h] = cols[i] ?? '');
+    headers.forEach((h,i)=> { o[h] = cols[i] ?? ''; });
     return o;
   });
 }
@@ -502,9 +535,16 @@ function renderMalla(careerCode){
     grid.appendChild(div);
   });
 
-  loadState(section, careerCode);
-  actualizarDependencias(section, careerCode);
-  updatePercentage(section);
+  // al final de renderMalla
+loadState(section, careerCode);
+actualizarDependencias(section, careerCode);
+updatePercentage(section);
+
+// ❗No guardes estado cuando estás viendo la malla de la pareja
+if (!isPartnerView()) {
+  try { saveState(section); } catch {}
+}
+
 }
 
 function areaClass(area){
@@ -584,9 +624,8 @@ function actualizarDependencias(host){
       return pre && pre.classList.contains('aprobado');
     });
     // después: NO borres "aprobado" al recalcular
-if (!ok){ el.classList.add('bloqueado'); }
-else    { el.classList.remove('bloqueado'); }
-
+    if (!ok){ el.classList.add('bloqueado'); }
+    else    { el.classList.remove('bloqueado'); }
   });
 }
 
@@ -673,10 +712,27 @@ function watchPartnerMalla(){
   const ref = doc(db,'users', state.pairOtherUid, 'malla', 'state');
   unsubMallaPartner = onSnapshot(ref, async (snap)=>{
     const data = snap.data() || {};
-    const partnerCareer = data.career || null;
+    let partnerCareer = data.career || null;
     const approved = Array.isArray(data.approved) ? data.approved : [];
 
-    // 1) Si hay carrera de la pareja, forzar render de esa carrera
+    // ⚠️ A veces llega "UMAYOR"/"USM" (universidad), no la carrera.
+    // En ese caso, fuerza fallback al perfil para obtener MEDVET/ICTEL.
+    if (partnerCareer === 'UMAYOR' || partnerCareer === 'USM') {
+      partnerCareer = null;
+    }
+
+    // 🔹 Fallback: si no hay career en malla/state, toma el career del perfil de la pareja
+    if (!partnerCareer && state.pairOtherUid){
+      try{
+        const profSnap = await getDoc(doc(db,'users', state.pairOtherUid));
+        if (profSnap.exists()){
+          const prof = profSnap.data() || {};
+          if (prof?.career) partnerCareer = prof.career;
+        }
+      }catch(_){ /* ignora errores de red/permiso */ }
+    }
+
+    // 1) Si hay carrera de la pareja (desde malla o perfil), forzar render de esa carrera
     if (partnerCareer){
       await forceRenderCareer(partnerCareer); // ← helper que re-renderiza y ajusta caption
     }
