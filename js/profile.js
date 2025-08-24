@@ -72,12 +72,14 @@ export function fillProfileForm(d){
   pfAgeHint.textContent = `Edad: ${calcAge(d?.birthday) ?? '—'}`;
 
   pfUniversity.value = d?.university || '';
-  if (pfUniversity.value === 'OTRA'){
-    pfCustomUniWrap.classList.remove('hidden');
+
+  // ⚙️ SIEMPRE iniciar oculto y mostrar SOLO si la universidad es "OTRA"
+  pfCustomUniWrap.classList.add('hidden');
+  pfCustomUniversity.value = '';
+  const showCustom = (pfUniversity.value === 'OTRA');
+  pfCustomUniWrap.classList.toggle('hidden', !showCustom);
+  if (showCustom) {
     pfCustomUniversity.value = d?.customUniversity || '';
-  } else {
-    pfCustomUniWrap.classList.add('hidden');
-    pfCustomUniversity.value = '';
   }
 
   // Color favorito (con fallback + preview)
@@ -91,13 +93,11 @@ export function fillProfileForm(d){
 
   // Eventos
   pfUniversity.onchange = ()=>{
-    if (pfUniversity.value === 'OTRA'){
-      pfCustomUniWrap.classList.remove('hidden');
-      pfCustomUniversity.focus();
-    } else {
-      pfCustomUniWrap.classList.add('hidden');
-      pfCustomUniversity.value = '';
-    }
+    // 👇 Solo mostrar el campo cuando sea "OTRA"
+    const show = (pfUniversity.value === 'OTRA');
+    pfCustomUniWrap.classList.toggle('hidden', !show);
+    if (!show) pfCustomUniversity.value = '';
+
     // al cambiar de universidad, repoblar carreras y resetear selección
     populateCareers(pfUniversity.value, null);
   };
