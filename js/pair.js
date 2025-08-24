@@ -7,6 +7,7 @@ import { $, state, updateDebug } from './state.js';
 
 let unsubPairDoc = null; // ⬅️ nueva: para cortar la suscripción al documento del pair
 
+
 export function initPair(){
   const createPairBtn = $('createPairBtn'), copyInviteBtn = $('copyInviteBtn');
   const joinByCodeBtn = $('joinByCodeBtn'), joinCode = $('joinCode');
@@ -63,7 +64,7 @@ export async function loadMyPair(){
   $('copyInviteBtn').disabled = !state.currentPairId;
   lockSharedIfNeeded();
   updateDebug();
-  document.dispatchEvent(new Event('pair:ready'));
+  document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
 
   // ⬅️ Suscríbete al doc del pair para reflejar en vivo cuando el otro se une/sale
   watchCurrentPairDoc(state.currentPairId);
@@ -93,7 +94,7 @@ async function createPair(){
   $('copyInviteBtn').disabled = false;
   lockSharedIfNeeded();
   updateDebug();
-  document.dispatchEvent(new Event('pair:ready'));
+  document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
 
   // ⬅️ empieza a escuchar el pair recién creado
   watchCurrentPairDoc(ref.id);
@@ -156,7 +157,7 @@ export async function joinPair(pairId){
   $('copyInviteBtn').disabled = false;
   lockSharedIfNeeded();
   updateDebug();
-  document.dispatchEvent(new Event('pair:ready'));
+  document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
 
   // ⬅️ escucha el pair al que te uniste
   watchCurrentPairDoc(pairId);
@@ -187,37 +188,40 @@ function watchCurrentPairDoc(pid){
     lockSharedIfNeeded();
     updateDebug();
     // Notifica a las vistas compartidas (perfil, horario, notas, malla)
-    document.dispatchEvent(new Event('pair:ready'));
+    document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
   }, (_err)=>{
     // en caso de error de suscripción, no rompemos la UI
   });
 }
 
 // 🔹 Eliminar pair (dejar de estar vinculado)
+// 🔹 Eliminar pair para TODOS (disolver party)
 export async function deletePair(){
   if (!state.currentUser || !state.currentPairId) return;
 
   const pid = state.currentPairId;
   const ref = doc(db,'pairs', pid);
-  const snap = await getDoc(ref);
-  if (!snap.exists()){
-    clearPairState();
-    return;
+
+  // Confirmación (puedes personalizar el texto)
+  if (!confirm('¿Quieres eliminar la party para ambos? Tu pareja también saldrá.')) return;
+
+  try {
+    // ✅ Disuelve la party borrando el documento completo
+    await deleteDoc(ref);
+  } catch (e) {
+    // Si por reglas de seguridad no pudieras borrar directamente,
+    // intenta primero vaciar "members" y luego borrar.
+    try {
+      await updateDoc(ref, { members: [] });
+      await deleteDoc(ref);
+    } catch(_){}
   }
 
-  // saca al usuario actual
-  await updateDoc(ref, { members: arrayRemove(state.currentUser.uid) });
-
-  // si ya no quedan miembros, elimina el documento
-  const after = await getDoc(ref);
-  const members = after.exists() ? (after.data().members||[]) : [];
-  if (members.length === 0){
-    try{ await deleteDoc(ref); }catch(_){}
-  }
-
+  // Limpia estado local (tu cliente)
   clearPairState();
-  alert('Pair eliminado. Ya no estás vinculado a otra cuenta.');
+  alert('Party eliminada para ambos.');
 }
+
 
 // Quita vínculos de pairs viejos manteniendo el par actual (exceptId)
 async function leaveOtherPairs(exceptId){
@@ -254,11 +258,11 @@ function clearPairState(){
   $('copyInviteBtn').disabled = true;
   lockSharedIfNeeded();
   updateDebug();
-  document.dispatchEvent(new Event('pair:ready'));
+  document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
 }
 
 export function lockSharedIfNeeded(){
-  const hasPair = !!state.currentPairId;
+  const hasPair = !!(state.currentPairId && state.pairOtherUid);
   const subtabCompartido = $('subtabCompartido'), horarioCompartido = $('horarioCompartido');
   subtabCompartido?.setAttribute('aria-disabled', hasPair ? 'false' : 'true');
   if (!hasPair){
