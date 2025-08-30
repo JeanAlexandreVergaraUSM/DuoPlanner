@@ -9,7 +9,10 @@ import {
 export function initCourses(){
   $('saveCourseBtn')?.addEventListener('click', saveCourse);
   $('cancelEditBtn')?.addEventListener('click', resetCourseForm);
-}
+const cc = $('courseColor'), ccCode = $('courseColorCode');
+if (cc && ccCode){
+  cc.addEventListener('input', ()=> { ccCode.textContent = (cc.value || '').toUpperCase(); });
+}}
 
 export function updateFormForUniversity(uni){
   const sectParLabel = $('sectParLabel');
@@ -70,6 +73,9 @@ export function setCoursesSubscription(){
   });
 }
 
+function isValidHex(s){ return typeof s==='string' && /^#[0-9A-Fa-f]{6}$/.test(s); }
+
+
 function startEditCourse(id, data){
   state.editingCourseId = id;
   $('courseName')?.setAttribute('value',''); // evita autofill extraño en algunos navegadores
@@ -78,6 +84,9 @@ function startEditCourse(id, data){
   $('courseProfessor').value = data.professor || '';
   $('courseSectPar').value = data.sectPar || '';
   if ($('courseScale')) $('courseScale').value = data.scale || $('courseScale').value;
+  $('courseColor') && ($('courseColor').value = isValidHex(data.color) ? data.color : '#3B82F6');
+  $('courseColorCode') && ($('courseColorCode').textContent = ( $('courseColor').value || '#3B82F6').toUpperCase());
+
 
   const saveBtn = $('saveCourseBtn'), cancelBtn = $('cancelEditBtn');
   if (saveBtn) saveBtn.textContent = 'Guardar cambios';
@@ -95,6 +104,8 @@ export function resetCourseForm(){
   if ($('courseCode'))      $('courseCode').value='';
   if ($('courseProfessor')) $('courseProfessor').value='';
   if ($('courseSectPar'))   $('courseSectPar').value='';
+  if ($('courseColor')) $('courseColor').value = '#3B82F6';
+  if ($('courseColorCode')) $('courseColorCode').textContent = '#3B82F6';
   const saveBtn = $('saveCourseBtn'), cancelBtn = $('cancelEditBtn');
   if (saveBtn)  saveBtn.textContent='Agregar ramo';
   cancelBtn?.classList.add('hidden');
@@ -116,8 +127,12 @@ async function saveCourse(){
   if (uni==='UMAYOR' || uni==='Universidad Mayor') finalScale='MAYOR';
   else if (uni==='USM' || uni==='UTFSM') finalScale='USM';
 
+  const colorPick = $('courseColor')?.value || '';
+  const color = isValidHex(colorPick) ? colorPick : null;
+
+
   const payload = {
-    name,
+    name, color,
     code: code || null,
     professor: professor || null,
     sectPar: sectPar || null,

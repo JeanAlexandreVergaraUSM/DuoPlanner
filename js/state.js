@@ -13,7 +13,8 @@ export const state = {
   shared: {
     horario: { semId: null },
     notas:   { semId: null, courseId: null },
-    malla:   { enabled: false }
+    malla:   { enabled: false },
+    calendar:{ semId: null }
   },
   DEBUG: (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && new URLSearchParams(location.search).has('debug'),
 };

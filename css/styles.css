@@ -424,3 +424,142 @@ input[type="color"]::-moz-color-swatch{ border: none; border-radius: 8px; }
   border-color: #1f9af3;
   box-shadow: 0 0 0 3px rgba(31,154,243,.2);
 }
+
+/* Horario: título y sala en bloque y centrados */
+.placed { text-align: center; }
+.placed-title { display: block; font-weight: 600; }
+.placed-room  { display: block; margin-top: 4px; font-size: 12px; color: #000; }
+
+.sched-usm .placed{
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  text-align:center;
+}
+.sched-usm .placed-title{
+  white-space:normal;
+  line-height:1.15;
+  font-weight:600;
+}
+
+
+.sched-usm .placed-room{
+  margin-top: 2px;
+  font-size: 12px;
+  color: #000 !important;  /* la sala siempre negra */
+  line-height: 1.1;
+  background: transparent !important;
+}
+
+.cell.slot .placed{
+  /* pasa de fila a columna y centra */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;                /* separa nombre vs sala */
+}
+
+/* ===== Calendario ===== */
+.cal-head {
+  display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px;
+}
+.cal-left { display:flex; align-items:center; gap:8px; }
+.cal-grid { display:flex; flex-direction:column; gap:6px; }
+.cal-row { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
+.cal-cell {
+  position:relative;
+  min-height:110px;
+  background:#0e1120;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:6px 6px 24px 6px;
+  overflow:hidden;
+}
+.cal-cell.muted { opacity:.55; }
+.cal-today { outline:2px solid #60a5fa; }
+.cal-date { font-size:12px; color:var(--muted); }
+.cal-events { margin-top:4px; display:flex; flex-direction:column; gap:4px; }
+.cal-ev {
+  display:flex; align-items:center; justify-content:space-between;
+  font-size:12px; padding:4px 6px; border-radius:6px;
+  border:1px solid rgba(0,0,0,.25);
+  cursor:pointer;
+}
+.cal-ev-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cal-ev-time { margin-left:8px; opacity:.9; flex-shrink:0; }
+.cal-dow { font-weight:600; text-align:center; background:transparent; border:none; padding:8px 0; }
+.cal-add {
+  position:absolute; right:6px; bottom:4px;
+  font-size:12px; padding:2px 6px; border-radius:6px;
+  background:transparent; border:1px dashed var(--line); color:var(--muted);
+}
+.cal-add:hover { border-style:solid; color:var(--ink); }
+
+/* Modal simple */
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:40; }
+.modal.hidden { display:none; }
+.modal-body {
+  width:min(720px, 92vw);
+  background:#0a0d1a; border:1px solid var(--line); border-radius:14px; padding:14px;
+}
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media (max-width:800px){ .grid2{ grid-template-columns:1fr; } }
+.checkbox input { transform: translateY(1px); }
+
+/* Calendario */
+.cal-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px}
+.cal-left{display:flex; align-items:center; gap:8px}
+.cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:8px}
+.cal-cell{background:#0f1115; border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:6px; min-height:92px}
+.cal-cell.head{background:transparent; border:none; text-align:center; font-weight:600; color:#9aa4af; min-height:auto; padding:2px}
+.cal-cell.empty{background:transparent; border:none}
+.cal-daynum{font-size:.9rem; color:#9aa4af; margin-bottom:6px}
+.cal-events{display:flex; flex-direction:column; gap:4px}
+.cal-evt{font-size:.85rem; padding:4px 6px; border-radius:6px; background:#1f2937; border:1px solid rgba(255,255,255,.08); cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* Modal genérico */
+.modal.hidden{display:none}
+.modal{position:fixed; inset:0; z-index:50}
+.modal-backdrop{position:absolute; inset:0; background:rgba(0,0,0,.5); backdrop-filter: blur(2px);}
+.modal-card{position:relative; max-width:520px; width:92%; margin:10vh auto 0; background:#0f1115; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:16px}
+.modal-card label{display:block; font-size:.9rem; color:#9aa4af; margin-bottom:4px}
+.modal-card input[type="text"],
+.modal-card input[type="date"],
+.modal-card input[type="time"],
+.modal-card select{
+  width:100%; background:#0b0d12; border:1px solid rgba(255,255,255,.08);
+  border-radius:8px; padding:8px; color:#e5e7eb;
+}
+.modal-card .row{display:flex; align-items:flex-end}
+.modal-card .primary{background:#2563eb; color:#fff; border:none; border-radius:8px; padding:8px 12px; cursor:pointer}
+
+/* Subtabs pequeñas */
+.tab.small{padding:6px 10px; font-size:.9rem}
+
+/* Calendario base */
+.cal-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px}
+.cal-left{display:flex; align-items:center; gap:8px}
+.cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:8px}
+.cal-cell{background:#0f1115; border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:6px; min-height:92px}
+.cal-cell.head{background:transparent; border:none; text-align:center; font-weight:600; color:#9aa4af; min-height:auto; padding:2px}
+.cal-cell.empty{background:transparent; border:none}
+.cal-daynum{font-size:.9rem; color:#9aa4af; margin-bottom:6px}
+.cal-events{display:flex; flex-direction:column; gap:4px}
+.cal-evt{font-size:.85rem; padding:4px 6px; border-radius:6px; background:#1f2937; border:1px solid rgba(255,255,255,.08); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* Modal */
+.modal.hidden{display:none}
+.modal{position:fixed; inset:0; z-index:50}
+.modal-backdrop{position:absolute; inset:0; background:rgba(0,0,0,.5); backdrop-filter: blur(2px);}
+.modal-card{position:relative; max-width:520px; width:92%; margin:10vh auto 0; background:#0f1115; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:16px}
+.modal-card label{display:block; font-size:.9rem; color:#9aa4af; margin-bottom:4px}
+.modal-card input[type="text"],
+.modal-card input[type="date"],
+.modal-card input[type="time"],
+.modal-card select{
+  width:100%; background:#0b0d12; border:1px solid rgba(255,255,255,.08);
+  border-radius:8px; padding:8px; color:#e5e7eb;
+}
+.modal-card .row{display:flex; align-items:flex-end}
+.modal-card .primary{background:#2563eb; color:#fff; border:none; border-radius:8px; padding:8px 12px; cursor:pointer}

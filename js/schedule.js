@@ -116,15 +116,33 @@ function getMySlots(){
   return (getActiveUniCode()==='UMAYOR') ? MAYOR_SLOTS : USM_SLOTS;
 }
 
+/* === helpers color === */
+function isValidHex(s){ return typeof s==='string' && /^#[0-9A-Fa-f]{6}$/.test(s); }
+function getCourseColorById(arr, id, fallback){
+  const c = (arr || []).find(x => x.id === id);
+  return isValidHex(c?.color) ? c.color : (fallback || '#3B82F6');
+}
+function bestText(color){
+  try{
+    const r = parseInt(color.slice(1,3),16),
+          g = parseInt(color.slice(3,5),16),
+          b = parseInt(color.slice(5,7),16);
+    const yiq = (r*299 + g*587 + b*114)/1000;
+    return (yiq >= 160) ? '#111' : '#fff';
+  }catch{ return '#0e0e0e'; }
+}
+
 /* ==================== ESTADO ==================== */
 let unsubscribeSchedule = null;
-let items = []; // { id, courseId, day, slot, start, end, pos, hpos }
+let items = []; // { id, courseId, day, slot, start, end, pos, hpos, displayName? }
 
 /* ==================== INIT ==================== */
 export function initSchedule(){
   renderShell();
-  bindDnD();
-  bindInlineRename(); 
+bindDnD();
+bindInlineRename();
+bindRightClickRoom();
+
 
   // Compartido
   renderSharedShell();
@@ -191,16 +209,22 @@ export function onActiveSemesterChanged(){
 function renderShell(){
   const host = $('horarioPropio');
   host.innerHTML = `
-    <div class="card" style="margin-bottom:12px">
-      <h3 style="margin:0 0 10px">Paleta de ramos</h3>
-      <div id="coursePalette" class="palette"></div>
-      <div class="muted" style="margin-top:6px">
-        Arrastra un ramo a un módulo. La pre-vista indica <b>arriba</b>, <b>completo</b>, <b>abajo</b>, <b>izquierda</b> o <b>derecha</b>.
-        (Para eliminar un bloque, haz <b>doble-click</b> sobre él).(Para editar un bloque, haz <b>click</b> sobre él).
-      </div>
+  <div class="card" style="margin-bottom:12px">
+    <h3 style="margin:0 0 10px">Paleta de ramos</h3>
+    <div id="coursePalette" class="palette"></div>
+    <div class="muted" style="margin-top:6px">
+      <ul style="margin:4px 0 0 20px; padding:0; list-style:disc;">
+        <li>Arrastra un ramo a un módulo.</li>
+        <li>La pre-vista indica <b>arriba</b>, <b>completo</b>, <b>abajo</b>, <b>izquierda</b> o <b>derecha</b>.</li>
+        <li>Para eliminar un bloque, haz <b>doble-click</b> sobre él.</li>
+        <li>Para editar un bloque, haz <b>click</b> sobre él.</li>
+        <li>Para ver su sala, pase el mouse por encima.</li>
+      </ul>
     </div>
-    <div id="schedUSM" class="sched-usm card"></div>
-  `;
+  </div>
+  <div id="schedUSM" class="sched-usm card"></div>
+`;
+
   renderPalette();
   renderGrid();
 }
@@ -221,6 +245,15 @@ function renderPalette(){
     chip.setAttribute('draggable','true');
     chip.dataset.courseId = c.id;
     chip.textContent = c.name;
+
+    // pinta el chip usando el color del ramo
+    const col = isValidHex(c.color) ? c.color : '#3B82F6';
+    chip.style.borderColor = col;
+    chip.style.boxShadow = 'inset 0 0 0 2px rgba(0,0,0,.15)';
+    // si prefieres relleno:
+    // chip.style.background = col;
+    // chip.style.color = bestText(col);
+
     pal.appendChild(chip);
   });
 }
@@ -314,14 +347,27 @@ function renderCellContent(day, slot){
 }
 
 function blockHtml(it, pos){
-  const name = (state.courses?.find(c=>c.id===it.courseId)?.name) || 'Ramo';
+  const course = (state.courses || []).find(c=>c.id===it.courseId);
+  const courseName = course?.name || 'Ramo';
+  const shown = (typeof it.displayName === 'string' && it.displayName.trim()) ? it.displayName.trim() : courseName;
+
+  const color = getCourseColorById(state.courses, it.courseId, myColor);
+  const text  = bestText(color);
+  const room  = (typeof it.room === 'string' && it.room.trim()) ? it.room.trim() : null;
+
   const h = it.hpos || 'single';
-  return `
-    <div class="placed pos-${pos} h-${h}" data-id="${it.id}" title="Doble-click para eliminar">
-      <div class="placed-title">${name}</div>
-    </div>
-  `;
+  const title = `${shown}${room ? ` · Sala: ${room}` : ''}`;
+
+ return `
+  <div class="placed pos-${pos} h-${h}" data-id="${it.id}"
+       title="${shown}${room ? ` · Sala: ${room}` : ''}"
+       style="background:${color}; border:1px solid rgba(0,0,0,0.25);">
+    <div class="placed-title" style="color:${text}; font-weight:600;">${shown}</div>
+  </div>
+`;
 }
+
+
 
 /* ---------- DnD + eliminar ---------- */
 function bindDnD(){
@@ -369,14 +415,16 @@ function bindInlineRename(){
     if (!rec) return;
 
     const course = (state.courses || []).find(c => c.id === rec.courseId);
-    const currentName = course?.name || titleEl.textContent.trim();
+    const courseName = course?.name || titleEl.textContent.trim();
+    const currentShown = (typeof rec.displayName === 'string' && rec.displayName.trim())
+      ? rec.displayName.trim()
+      : courseName;
 
     // Crea input
     const inp = document.createElement('input');
     inp.type = 'text';
     inp.className = 'inline-rename';
-    inp.value = currentName;
-    // ancho cómodo
+    inp.value = currentShown;
     const w = Math.max(titleEl.offsetWidth, 140);
     inp.style.width = w + 'px';
 
@@ -389,23 +437,29 @@ function bindInlineRename(){
       // reconstruye el título
       const newTitle = document.createElement('div');
       newTitle.className = 'placed-title';
-      newTitle.textContent = save ? (inp.value || '').trim() : currentName;
+      const newVal = (inp.value || '').trim();
+      newTitle.textContent = save ? (newVal || courseName) : currentShown;
       inp.replaceWith(newTitle);
 
-      // Guardar si cambió y hay contexto
       if (!save) return;
-      const newName = (inp.value || '').trim();
-      if (!newName || newName === currentName) return;
 
+      // Si no cambió, no hacemos nada
+      if (newVal === currentShown) return;
+
+      // Guardar SOLO en el bloque del horario
       if (!state.currentUser || !state.activeSemesterId) return;
       try{
-        const cRef = doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses', rec.courseId);
-        await updateDoc(cRef, { name: newName });
+        const sRef = doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule', rec.id);
+        // Si el input queda vacío, borra displayName para volver al nombre real del ramo
+        const payload = newVal ? { displayName: newVal } : { displayName: null };
+        await updateDoc(sRef, payload);
+        // Actualiza cache local para ver el cambio altiro
+        const idx = items.findIndex(x => x.id === rec.id);
+        if (idx >= 0) items[idx].displayName = newVal || null;
       }catch(err){
         console.error('rename error', err);
-        // fallback visual si falla
-        newTitle.textContent = currentName;
-        alert('No se pudo renombrar el ramo. Intenta nuevamente.');
+        alert('No se pudo renombrar el bloque. Intenta nuevamente.');
+        newTitle.textContent = currentShown; // rollback visual
       }
     };
 
@@ -414,6 +468,44 @@ function bindInlineRename(){
       if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
     });
     inp.addEventListener('blur', ()=> finish(true));
+  });
+}
+
+function bindRightClickRoom(){
+  // Click derecho sobre un bloque del HORARIO PROPIO para editar la sala
+  document.addEventListener('contextmenu', async (e)=>{
+    const placed = e.target.closest('.placed');
+    if (!placed) return;
+
+    // solo permitir si el bloque está en tu horario (no en el compartido)
+    const insideMySched = placed.closest('#schedUSM');
+    if (!insideMySched) return;
+
+    e.preventDefault();
+
+    const id  = placed.dataset.id;
+    const rec = items.find(x => x.id === id);
+    if (!rec) return;
+    if (!state.currentUser || !state.activeSemesterId) return;
+
+    const current = (rec.room || '').trim();
+    const next = prompt('Sala del ramo (deja vacío para borrar):', current);
+    if (next === null) return; // cancelado
+
+    const newRoom = (next || '').trim();
+
+    try{
+      const sRef = doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule', rec.id);
+      await updateDoc(sRef, { room: newRoom || null });
+
+      // Actualiza cache local y re-renderiza
+      const idx = items.findIndex(x => x.id === rec.id);
+      if (idx >= 0) items[idx].room = newRoom || null;
+      renderGrid();
+    }catch(err){
+      console.error('room update error', err);
+      alert('No se pudo actualizar la sala. Intenta nuevamente.');
+    }
   });
 }
 
@@ -514,11 +606,10 @@ function bindCellDropZones(){
 
 function clearHints(cell){
   cell.classList.remove('over','hint-top','hint-full','hint-bottom',
-                        'hint-left','hint-center','hint-right'); // ← añade estas
+                        'hint-left','hint-center','hint-right');
   delete cell.dataset.droppos;
   delete cell.dataset.droph;
 }
-
 
 /* ==================== VISTA COMPARTIDA ==================== */
 let unsubShared = null;
@@ -593,17 +684,30 @@ function renderSharedCell(day, slot){
   `;
 }
 
-function blockHtmlColored(it, pos, color, isMine){
-  const courseArr = isMine ? (state.courses || []) : (sharedCourses || []);
-  const name = (courseArr.find(c=>c.id===it.courseId)?.name) || 'Ramo';
+function blockHtmlColored(it, pos, _colorFallback, isMine){
+  const courseArr  = isMine ? (state.courses || []) : (sharedCourses || []);
+  const course     = courseArr.find(c=>c.id===it.courseId);
+  const courseName = course?.name || 'Ramo';
+  const shown      = (typeof it.displayName === 'string' && it.displayName.trim()) ? it.displayName.trim() : courseName;
+
+  const color = getCourseColorById(courseArr, it.courseId, partnerColor);
+  const text  = bestText(color);
+  const room  = (typeof it.room === 'string' && it.room.trim()) ? it.room.trim() : null;
+
   const h = it.hpos || 'single';
-  return `
-    <div class="placed pos-${pos} h-${h}" title="${isMine ? 'Tuyo' : 'Pareja'}"
-         style="background:${color}; color:#0e0e0e; font-weight:600; border:1px solid rgba(0,0,0,0.25); margin:2px 0;">
-      <div class="placed-title">${name}</div>
-    </div>
-  `;
+  const title = `${shown}${room ? ` · Sala: ${room}` : ''}`;
+
+ return `
+  <div class="placed pos-${pos} h-${h}"
+       title="${shown}${room ? ` · Sala: ${room}` : ''}"
+       style="background:${color}; border:1px solid rgba(0,0,0,0.25); margin:2px 0;">
+    <div class="placed-title" style="color:${text}; font-weight:600;">${shown}</div>
+  </div>
+`;
+
 }
+
+
 
 async function subscribeShared(semId){
   if (unsubShared){ unsubShared(); unsubShared=null; }

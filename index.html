@@ -15,6 +15,7 @@
       <button class="tab" data-route="#/horario">Horario</button>
       <button class="tab" data-route="#/notas">Notas</button>
       <button class="tab" data-route="#/malla">Malla</button>
+      <button class="tab" data-route="#/calendario">Calendario</button>
       <div class="row" style="margin-left:12px">
         <button id="signInBtn" class="primary">Iniciar sesión</button>
         <div id="userBadge" class="pill" style="display:none">
@@ -110,6 +111,11 @@
               <div><label>Nombre del ramo</label><br/><input id="courseName" placeholder="Ej: Fisiología II"/></div>
               <div><label>Código (opcional)</label><br/><input id="courseCode" placeholder="Ej: MED-204"/></div>
               <div><label>Profesor</label><br/><input id="courseProfessor" placeholder="Nombre del profesor/a"/></div>
+              <div>
+                <label>Color del ramo</label><br/>
+                <input type="color" id="courseColor" value="#3B82F6" style="width:48px;height:32px;padding:0;border:none;border-radius:8px;vertical-align:middle"/>
+                <span class="course-meta" id="courseColorCode">#3B82F6</span>
+              </div>
             </div>
             <div class="grid-3" style="margin-top:10px">
               <div><label id="sectParLabel">Sección</label><br/><input id="courseSectPar" placeholder="Ej: 1"/></div>
@@ -139,7 +145,7 @@
         <button id="subtabPropio" class="subtab active" data-sub="propio">Propio</button>
         <button id="subtabCompartido" class="subtab" data-sub="compartido" aria-disabled="true" title="Necesitas estar emparejado">Pareja</button>
       </div>
-      <div id="horarioPropio" class="subpage"><div class="muted">Constructor de horario (próximo paso).</div></div>
+      <div id="horarioPropio" class="subpage"><div class="muted"></div></div>
       <div id="horarioCompartido" class="subpage overlay-disabled disabled hidden"><div class="muted">Vista combinada (se habilita con Pair).</div></div>
     </section>
 
@@ -203,8 +209,9 @@
           <button id="gr-saveExpr" class="primary">Guardar fórmula</button>
         </div>
         <div class="muted" style="margin-top:6px">
-          Usa las <b>claves</b> de los componentes creados (p. ej. <code>cert1</code>, <code>cert2</code>, <code>ctrl1</code>, <code>lab1</code>) y operadores <code>+ - * / ( )</code>.
-          La fórmula se evalúa en la escala del ramo (0–100 USM o 1–7 UMayor).
+          • Usa las <b>claves</b> de los componentes creados (p. ej. <code>cert1</code>, <code>cert2</code>, <code>ctrl1</code>, <code>lab1</code>) 
+          y operadores <code>+ - * / ( )</code>.<br>
+          • Puedes usar la <b>nota final de otro ramo</b> (p. ej. <code>final(laboratorio de fisica)</code>).
         </div>
       </div>
 
@@ -223,6 +230,9 @@
       <h2>Malla</h2>
       <div id="malla-host"></div>
     </section>
+
+    <!-- CALENDARIO (el contenido lo inyecta calendar.js) -->
+    <section id="page-calendario" class="page card hidden"></section>
   </div>
 
   <!-- Entrypoints -->

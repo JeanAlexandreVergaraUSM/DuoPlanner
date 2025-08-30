@@ -11,6 +11,9 @@ let currentCourseId = null;
 let unsubComp = null;
 let components = []; // [{id,key,name,score}]
 let header = { scale: 'USM', finalExpr: '', rulesText: '' };
+// --- Referencias cruzadas de notas finales (otros ramos del MISMO semestre) ---
+let crossFinals = { byName:{}, byCode:{}, byId:{} };  // caches
+
 
 export function initGrades(){
   bindUi();
@@ -45,6 +48,10 @@ function bindUi(){
   // 🔹 Panel "Notas de tu pareja" como pestaña
   bindPartnerPanelUi();
   document.addEventListener('pair:ready', grpPopulateSemesters); // llena select cuando hay pair
+
+    // ===== Autocomplete para final(...) y finalCode(...) en la fórmula =====
+  setupFinalAutocomplete();
+
 }
 
 
@@ -79,6 +86,7 @@ function ensureRulesUI(){
     </div>
     <div class="row" style="align-items:flex-start;margin-top:8px">
       <textarea id="gr-rulesText" rows="4" style="flex:1 1 520px;min-height:86px;background:#0e1120;border:1px solid var(--line);color:var(--ink);padding:8px 10px;border-radius:10px"></textarea>
+      <div id="gr-formulaError" class="muted" style="margin-top:6px;color:#fca5a5"></div>
       <button id="gr-saveRules" class="primary">Guardar reglas</button>
     </div>
     <div id="gr-rulesStatus" class="muted" style="margin-top:6px"></div>
@@ -122,13 +130,20 @@ async function loadCoursesIntoSelect(){
   }
   await loadGradingDoc();
   await watchComponents();
+  await rebuildCrossFinals();
+computeAndRender(); // para que tome las referencias recién cargadas
+
 }
 
 async function onCourseChange(e){
   currentCourseId = e.target.value || null;
   await loadGradingDoc();
   await watchComponents();
+  await rebuildCrossFinals();
+computeAndRender();
+
 }
+
 
 /* =================== Refs Firestore =================== */
 
@@ -203,6 +218,8 @@ async function saveExpr(){
   const expr = normalizeExpr(raw);        // ← conserva 20%
   header.finalExpr = expr;
   await updateDoc(gradingDocRef(), { finalExpr: expr });
+  await rebuildCrossFinals();
+
   $('gr-finalExpr').value = expr;         // no lo cambiamos a (20/100)
   computeAndRender();
 }
@@ -212,6 +229,8 @@ async function saveRules(){
   const txt = ($('gr-rulesText').value || '').trim();
   header.rulesText = txt;
   await updateDoc(gradingDocRef(), { rulesText: txt });
+  await rebuildCrossFinals();
+
   computeAndRender();
 }
 
@@ -230,6 +249,8 @@ async function watchComponents(){
       components = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
       renderComponents();
       computeAndRender();
+      rebuildCrossFinals().then(()=> computeAndRender());
+
     }
   );
 }
@@ -375,19 +396,37 @@ function computeAndRender(){
   });
 
   // Nota final
-  let final = null;
-  if (header.finalExpr && header.finalExpr.trim()!==''){
-    try{
-      final = safeEvalExpr(header.finalExpr, values);
-      if (typeof final === 'number' && isFinite(final)){
-        final = truncate(final, header.scale);
-      } else {
-        final = null;
-      }
-    }catch{
+let final = null;
+let lastErr = '';
+if (header.finalExpr && header.finalExpr.trim()!==''){
+  try{
+    final = safeEvalExpr(header.finalExpr, values, {
+      avg, min: Math.min, max: Math.max,
+      final:      (name)=> lookupFinalByName(name),
+      finalCode:  (code)=> lookupFinalByCode(code),
+      finalId:    (id)=>   lookupFinalById(id)
+    });
+    if (typeof final === 'number' && isFinite(final)){
+      final = truncate(final, header.scale);
+    } else {
       final = null;
     }
+  }catch(e){
+    lastErr = e?.message || String(e || '');
+    final = null;
   }
+}
+
+
+// ⚠️ Muestra el error (y deja el flag en dataset para inspección avanzada)
+const errBox = $('gr-formulaError');
+if (errBox){
+  errBox.textContent = lastErr ? `Error en fórmula: ${lastErr}` : '';
+}
+$('gr-rulesStatus') && ( $('gr-rulesStatus').dataset.formulaError = lastErr );
+
+
+
 
   // Umbral efectivo fijo por escala
   const thr = (header.scale==='MAYOR') ? 3.95 : 54.5;
@@ -439,6 +478,71 @@ function computeAndRender(){
   renderResult({ final, thr, status, needed });
 }
 
+async function rebuildCrossFinals(){
+  crossFinals = { byName:{}, byCode:{}, byId:{} };
+  if (!state.currentUser || !state.activeSemesterId) return;
+  // Necesitamos la lista de ramos del semestre (ya la tiene state.courses gracias a courses.js)
+  const courses = Array.isArray(state.courses) ? state.courses : [];
+  // Para cada ramo, leemos su meta y componentes, y calculamos su final
+  for (const c of courses){
+    try{
+      const metaRef = doc(
+        db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,
+        'courses',c.id,'grading','meta'
+      );
+      const metaSnap = await getDoc(metaRef);
+      const meta = metaSnap.exists() ? metaSnap.data() : { scale:'USM', finalExpr:'' };
+
+      // Lee componentes
+      const compRef = collection(
+        db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,
+        'courses',c.id,'grading','meta','components'
+      );
+      const compSnap = await getDocs(compRef);
+      const comps = compSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+
+      // Prepara valores (key -> score) en la escala del ramo
+      const values = {};
+      const min = meta.scale==='MAYOR' ? 1 : 0;
+      const max = meta.scale==='MAYOR' ? 7 : 100;
+      for (const k of comps){
+        if (typeof k.score === 'number' && isFinite(k.score)){
+          const v = Math.max(min, Math.min(max, k.score));
+          values[k.key] = v;
+        }
+      }
+
+      // Calcula final (si hay fórmula)
+      let final = null;
+      if ((meta.finalExpr||'').trim()){
+        try{
+          final = safeEvalExpr(meta.finalExpr, values, {
+            avg, min: Math.min, max: Math.max,
+            final:  (name)=> NaN,            // evitar recursión entre ramos al precalcular
+            finalCode: (_)=> NaN,
+            finalId: (_)=> NaN
+          });
+          if (typeof final === 'number' && isFinite(final)){
+            final = truncate(final, meta.scale);
+          } else {
+            final = null;
+          }
+        }catch{ final = null; }
+      }
+
+      // DESPUÉS (normaliza nombre y código para búsquedas tolerantes)
+const nameKey = normStr(c.name);
+const codeKey = normStr(c.code);
+if (nameKey) crossFinals.byName[nameKey] = { final, scale: meta.scale, id:c.id };
+if (codeKey) crossFinals.byCode[codeKey] = { final, scale: meta.scale, id:c.id };
+crossFinals.byId[c.id] = { final, scale: meta.scale, id:c.id };
+
+
+    }catch{ /* ignorar errores puntuales para no romper la UI */ }
+  }
+}
+
+
 /* ======= Reglas: parsing + evaluación ======= */
 
 function parseRules(text){
@@ -459,8 +563,11 @@ function evaluateRules(lines, vars){
     const { left, op, right } = parsed;
     let lv = null, rv = null, ok = false;
     try{
-      lv = safeEvalExpr(left, vars, { avg, min: Math.min, max: Math.max });
-      rv = safeEvalExpr(right, vars, { avg, min: Math.min, max: Math.max });
+      lv = safeEvalExpr(left, vars,  { avg, min: Math.min, max: Math.max,
+                                 final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById });
+rv = safeEvalExpr(right, vars, { avg, min: Math.min, max: Math.max,
+                                 final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById });
+
       ok = compare(lv, op, rv);
     }catch{
       ok = false;
@@ -554,12 +661,28 @@ function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 function normalizeExpr(expr){
   if (!expr) return '';
   let s = String(expr).trim();
-  // separador decimal con coma -> punto
-  s = s.replace(/,/g, '.');
-  // espacios extra
-  s = s.replace(/\s+/g, ' ');
+  s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'"); // tipográficas → rectas
+  s = s.replace(/,/g, '.');      // coma decimal → punto
+  s = s.replace(/\s+/g, ' ');    // compacta espacios
   return s;
 }
+
+// Envuelve en comillas los argumentos de final()/finalCode()/finalId() si no vienen con comillas.
+// Ej.: final(Laboratorio de Física) -> final("Laboratorio de Física")
+function autoQuoteFunctionArgs(s){
+  return s.replace(/\b(final|finalCode|finalId)\(\s*([^)]+?)\s*\)/g, (m, fn, rawArg) => {
+    const a = String(rawArg).trim();
+    // Si ya viene con comillas al inicio, respeta: final("X") / final('X')
+    if (/^["'].*["']$/.test(a)) return `${fn}(${a})`;
+    // Si el usuario metió una expresión (rara) con paréntesis/comas, no la tocamos
+    if (/[(),]/.test(a)) return `${fn}(${a})`;
+    // En cualquier otro caso, lo envolvemos en comillas dobles
+    const quoted = a.replace(/"/g, '\\"');
+    return `${fn}("${quoted}")`;
+  });
+}
+
+
 
 // Convierte % solo para evaluar (20% -> (20/100))
 function prepareForEval(expr){
@@ -569,13 +692,20 @@ function prepareForEval(expr){
 
 // Evaluación segura con variables (claves de componentes) y funciones whitelisted
 function safeEvalExpr(expr, vars, fns = {}){
-  const normalized = normalizeExpr(expr);        // mantiene %
-  // Validamos que el input solo tenga caracteres permitidos (incluye % para la vista)
-  if (!/^[\w\s\.\+\-\*\/\(\),%]+$/.test(normalized)) {
+  // 1) Normaliza texto y aplica auto-comillas a final(...)/finalCode(...)/finalId(...)
+  const normalized = normalizeExpr(expr);
+  const withQuoted = autoQuoteFunctionArgs(normalized);
+
+  // 2) Enmascara literales de cadena por 0 para la validación (así no fallamos por comillas)
+  const masked = withQuoted.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '0');
+
+  // 3) Valida que *por fuera* de cadenas solo haya tokens permitidos
+  if (!/^[\w\s\.\+\-\*\/\(\),%]+$/.test(masked)) {
     throw new Error('La fórmula contiene caracteres no permitidos.');
   }
-  // Para evaluar, convertimos % → /100
-  const e = prepareForEval(normalized);
+
+  // 4) Para evaluar, convierte % → /100 sobre la versión con auto-quote
+  const e = prepareForEval(withQuoted);
 
   const keys = Object.keys(vars);
   const vals = keys.map(k => vars[k] ?? 0); // faltantes como 0
@@ -586,6 +716,10 @@ function safeEvalExpr(expr, vars, fns = {}){
   // eslint-disable-next-line no-new-func
   return Function(...fnNames, ...keys, `"use strict"; return (${e});`)(...fnVals, ...vals);
 }
+
+
+
+
 
 /* ========== PESTAÑA: "Notas de tu pareja" (solo lectura) ========== */
 
@@ -852,4 +986,55 @@ function truncate(val, scale){
   } else {
     return Math.trunc(val * 10) / 10;     // 1 decimal truncado
   }
+}
+
+function normStr(s){
+  return (s||'')
+    .toString()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'') // sin tildes
+    .replace(/\s+/g,' ').trim().toLowerCase();
+}
+
+
+
+
+
+function lookupFinalByName(name){
+  const k = normStr(name);
+  if (!k) return NaN;
+
+  const cur = (state.courses||[]).find(x=>x.id===currentCourseId);
+  if (k === normStr(cur?.name)) return NaN; // evita autoreferencia
+
+  const exact = crossFinals.byName[k];
+  if (exact && typeof exact.final === 'number') return exact.final;
+
+  const all = Array.isArray(state.courses) ? state.courses : [];
+  const starts = all.filter(c => normStr(c.name).startsWith(k) && c.id !== currentCourseId);
+  if (starts.length === 1){
+    const hit = crossFinals.byId[starts[0].id];
+    if (hit && typeof hit.final === 'number') return hit.final;
+  }
+  const contains = all.filter(c => normStr(c.name).includes(k) && c.id !== currentCourseId);
+  if (contains.length === 1){
+    const hit = crossFinals.byId[contains[0].id];
+    if (hit && typeof hit.final === 'number') return hit.final;
+  }
+  return NaN;
+}
+
+
+
+
+function lookupFinalByCode(code){
+  const k = normStr(code);
+  const cur = (state.courses||[]).find(x=>x.id===currentCourseId);
+  if (k && k === normStr(cur?.code)) return NaN;
+  const hit = crossFinals.byCode[k];
+  return (hit && typeof hit.final === 'number') ? hit.final : NaN;
+}
+function lookupFinalById(id){
+  if (!id || id===currentCourseId) return NaN;
+  const hit = crossFinals.byId[id];
+  return (hit && typeof hit.final === 'number') ? hit.final : NaN;
 }

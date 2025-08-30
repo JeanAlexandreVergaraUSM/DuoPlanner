@@ -5,6 +5,7 @@ import {
   collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, getDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { onActiveSemesterChanged } from './schedule.js';
+import { onActiveSemesterChanged as calOnSem } from './calendar.js';
 import { setCoursesSubscription, resetCourseForm, updateFormForUniversity } from './courses.js';
 
 let unsubscribeSemesters = null;
@@ -135,6 +136,7 @@ export async function setActiveSemester(semId) {
 
   // Avisar al horario y depurar
   onActiveSemesterChanged();
+  calOnSem?.();
   updateDebug();
 
   // Refresca la lista para que se vea "Activo"
