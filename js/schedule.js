@@ -1,0 +1,662 @@
+// js/schedule.js
+import { db } from './firebase.js';
+import { $, state } from './state.js';
+import {
+  collection, addDoc, onSnapshot, doc, deleteDoc, query,
+  getDocs, orderBy, getDoc, updateDoc
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+let myColor = '#22c55e';
+let partnerColor = '#ff69b4';
+let unsubPartnerProfile = null;
+
+// 🟦 Auto-scroll durante drag
+let isDraggingChip = false;
+let autoScrollRAF = null;
+const AUTO_EDGE = 80;
+const AUTO_SPEED = 28;
+
+// 🟦 Guardamos los slots vigentes para numeración sin contar lunch
+let CURRENT_SLOTS = [];         // propio
+let SHARED_CURRENT_SLOTS = [];  // pareja
+
+const DAYS = ['Lun','Mar','Mié','Jue','Vie'];
+
+function handleGlobalDragOver(e){
+  if (!isDraggingChip) return;
+  const y = e.clientY;
+  const h = window.innerHeight;
+
+  let dy = 0;
+  if (y < AUTO_EDGE) {
+    const t = (AUTO_EDGE - y) / AUTO_EDGE;
+    dy = -Math.ceil(AUTO_SPEED * t);
+  } else if (y > h - AUTO_EDGE) {
+    const t = (y - (h - AUTO_EDGE)) / AUTO_EDGE;
+    dy = Math.ceil(AUTO_SPEED * t);
+  }
+
+  if (dy !== 0 && autoScrollRAF === null) {
+    autoScrollRAF = requestAnimationFrame(() => {
+      window.scrollBy(0, dy);
+      autoScrollRAF = null;
+    });
+  }
+}
+function stopGlobalAutoScroll(){
+  isDraggingChip = false;
+  if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
+}
+
+/* ==================== SLOTS ==================== */
+// USM
+export const USM_SLOTS = [
+  { label:'1/2',   start:'08:15', end:'09:25',
+    lines:[{n:'1',start:'08:15',end:'08:50'},{n:'2',start:'08:50',end:'09:25'}] },
+  { label:'3/4',   start:'09:40', end:'10:50',
+    lines:[{n:'3',start:'09:40',end:'10:15'},{n:'4',start:'10:15',end:'10:50'}] },
+  { label:'5/6',   start:'11:05', end:'12:15',
+    lines:[{n:'5',start:'11:05',end:'11:40'},{n:'6',start:'11:40',end:'12:15'}] },
+  { label:'7/8',   start:'12:30', end:'13:40',
+    lines:[{n:'7',start:'12:30',end:'13:05'},{n:'8',start:'13:05',end:'13:40'}] },
+
+  { label:'ALMUERZO', start:'13:40', end:'14:40', lunch:true },
+
+  { label:'9/10',  start:'14:40', end:'15:50',
+    lines:[{n:'9',start:'14:40',end:'15:15'},{n:'10',start:'15:15',end:'15:50'}] },
+  { label:'11/12', start:'16:05', end:'17:15',
+    lines:[{n:'11',start:'16:05',end:'16:40'},{n:'12',start:'16:40',end:'17:15'}] },
+  { label:'13/14', start:'17:30', end:'18:40',
+    lines:[{n:'13',start:'17:30',end:'18:05'},{n:'14',start:'18:05',end:'18:40'}] },
+  { label:'15/16', start:'18:55', end:'20:05',
+    lines:[{n:'15',start:'18:55',end:'19:30'},{n:'16',start:'19:30',end:'20:05'}] },
+  { label:'17/18', start:'20:20', end:'21:30',
+    lines:[{n:'17',start:'20:20',end:'20:55'},{n:'18',start:'20:55',end:'21:30'}] },
+  { label:'19/20', start:'21:45', end:'22:55',
+    lines:[{n:'19',start:'21:45',end:'22:20'},{n:'20',start:'22:20',end:'22:55'}] },
+];
+
+// U. Mayor (dos sublíneas de 35', almuerzo 12:40–14:00)
+export const MAYOR_SLOTS = [
+  block('1/2',   '08:30','09:40', ['08:30-09:05','09:05-09:40']),
+  block('3/4',   '10:00','11:10', ['10:00-10:35','10:35-11:10']),
+  block('5/6',   '11:30','12:40', ['11:30-12:05','12:05-12:40']),
+  { label:'ALMUERZO', start:'12:40', end:'14:00', lunch:true },
+  block('7/8',   '14:00','15:10', ['14:00-14:35','14:35-15:10']),
+  block('9/10',  '15:30','16:40', ['15:30-16:05','16:05-16:40']),
+  block('11/12', '17:00','18:10', ['17:00-17:35','17:35-18:10']),
+  block('13/14', '18:30','19:40', ['18:30-19:05','19:05-19:40']),
+  block('15/16', '20:00','21:10', ['20:00-20:35','20:35-21:10']),
+  block('17/18', '21:30','22:40', ['21:30-22:05','22:05-22:40']),
+];
+
+function block(label, start, end, linesArr){
+  return { label, start, end, lines: linesArr.map(s => {
+    const [a,b] = s.split('-'); return { start:a, end:b };
+  })};
+}
+
+/* === helpers universidad === */
+function uniCodeFromReadable(readable){
+  if (!readable) return '';
+  const r = String(readable).toLowerCase();
+  if (r === 'umayor' || r.includes('mayor')) return 'UMAYOR';
+  if (r === 'usm' || r === 'utfsm' || r.includes('utfsm') || r.includes('santa maría') || r.includes('santa maria')) {
+    return 'USM';
+  }
+  return 'OTRA';
+}
+function getActiveUniCode(){
+  const u = state.activeSemesterData?.universityAtThatTime
+         || state.profileData?.university
+         || '';
+  return uniCodeFromReadable(u);
+}
+function getMySlots(){
+  return (getActiveUniCode()==='UMAYOR') ? MAYOR_SLOTS : USM_SLOTS;
+}
+
+/* ==================== ESTADO ==================== */
+let unsubscribeSchedule = null;
+let items = []; // { id, courseId, day, slot, start, end, pos, hpos }
+
+/* ==================== INIT ==================== */
+export function initSchedule(){
+  renderShell();
+  bindDnD();
+  bindInlineRename(); 
+
+  // Compartido
+  renderSharedShell();
+  document.addEventListener('pair:ready', () => {
+    populateSharedSemesters();
+    if (state.shared.horario.semId) {
+      subscribeShared(state.shared.horario.semId);
+    }
+  });
+  $('sh-semSel')?.addEventListener('change', (e)=>{
+    state.shared.horario.semId = e.target.value || null;
+    subscribeShared(state.shared.horario.semId);
+  });
+
+  // Subtabs
+  const tabProp = $('subtabPropio');
+  const tabComp = $('subtabCompartido');
+  const pageProp = $('horarioPropio');
+  const pageComp = $('horarioCompartido');
+
+  function showPropio(){
+    tabProp?.classList.add('active'); tabComp?.classList.remove('active');
+    pageProp?.classList.remove('hidden'); pageComp?.classList.add('hidden');
+  }
+  function showCompartido(){
+    if (tabComp?.getAttribute('aria-disabled') === 'true'){
+      alert('Debes emparejarte primero para ver el horario de tu pareja.');
+      return;
+    }
+    tabComp?.classList.add('active'); tabProp?.classList.remove('active');
+    pageComp?.classList.remove('hidden'); pageProp?.classList.add('hidden');
+
+    const sel = $('sh-semSel');
+    if (sel && !sel.value){
+      const first = Array.from(sel.options).find(o => o.value);
+      if (first){ sel.value = first.value; }
+      if (sel?.value){ state.shared.horario.semId = sel.value; }
+    }
+    if (state.shared.horario.semId){
+      subscribeShared(state.shared.horario.semId);
+    } else {
+      populateSharedSemesters();
+    }
+  }
+
+  tabProp?.addEventListener('click', showPropio);
+  tabComp?.addEventListener('click', showCompartido);
+  showPropio();
+}
+
+export function onActiveSemesterChanged(){
+  if (unsubscribeSchedule){ unsubscribeSchedule(); unsubscribeSchedule=null; }
+  items = []; renderGrid();
+
+  if (!state.currentUser || !state.activeSemesterId) return;
+  const ref = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule');
+  unsubscribeSchedule = onSnapshot(query(ref), (snap)=>{
+    items = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    renderGrid();
+  });
+}
+
+/* ==================== UI PROPIO ==================== */
+function renderShell(){
+  const host = $('horarioPropio');
+  host.innerHTML = `
+    <div class="card" style="margin-bottom:12px">
+      <h3 style="margin:0 0 10px">Paleta de ramos</h3>
+      <div id="coursePalette" class="palette"></div>
+      <div class="muted" style="margin-top:6px">
+        Arrastra un ramo a un módulo. La pre-vista indica <b>arriba</b>, <b>completo</b>, <b>abajo</b>, <b>izquierda</b> o <b>derecha</b>.
+        (Para eliminar un bloque, haz <b>doble-click</b> sobre él).(Para editar un bloque, haz <b>click</b> sobre él).
+      </div>
+    </div>
+    <div id="schedUSM" class="sched-usm card"></div>
+  `;
+  renderPalette();
+  renderGrid();
+}
+
+export function refreshCourseOptions(){ renderPalette(); renderGrid(); }
+
+function renderPalette(){
+  const pal = $('coursePalette');
+  if (!pal) return;
+  pal.innerHTML = '';
+  if (!state.courses || state.courses.length===0){
+    pal.innerHTML = `<div class="muted">No hay ramos en el semestre activo.</div>`;
+    return;
+  }
+  state.courses.forEach(c=>{
+    const chip = document.createElement('div');
+    chip.className = 'palette-chip';
+    chip.setAttribute('draggable','true');
+    chip.dataset.courseId = c.id;
+    chip.textContent = c.name;
+    pal.appendChild(chip);
+  });
+}
+
+function renderGrid(){
+  const host = $('schedUSM');
+  if (!host) return;
+
+  const SLOTS = getMySlots();
+  CURRENT_SLOTS = SLOTS;
+
+  const isUSM = getActiveUniCode()==='USM';
+  const headerTitle = isUSM ? 'Bloque' : 'Módulo';
+
+  host.innerHTML = `
+    <div class="usm-grid2">
+      <div class="cell header">${headerTitle}</div>
+      ${DAYS.map(d=>`<div class="cell header">${d}</div>`).join('')}
+      ${SLOTS.map((s,slotIndex)=>`
+        <div class="cell mod ${s.lunch?'lunch':''}" data-slot="${slotIndex}">
+          ${renderModuleCell(s, slotIndex, isUSM ? 'USM' : 'UMAYOR')}
+        </div>
+        ${DAYS.map((_,dayIndex)=>`
+          <div class="cell slot ${s.lunch?'is-lunch':''}"
+               data-day="${dayIndex}" data-slot="${slotIndex}"
+               ${s.lunch?'aria-disabled="true"':''}>
+            ${renderCellContent(dayIndex, slotIndex)}
+          </div>
+        `).join('')}
+      `).join('')}
+    </div>
+  `;
+  bindCellDropZones();
+}
+
+/* === celda izquierda (numeración y sublíneas) === */
+function renderModuleCell(s, slotIndex, uni){
+  if (s.lunch){
+    return `
+      <div class="mod-label">ALMUERZO</div>
+      <div class="mod-time">${s.start}–${s.end}</div>
+    `;
+  }
+
+  const slots = (SHARED_CURRENT_SLOTS.length ? SHARED_CURRENT_SLOTS : CURRENT_SLOTS);
+  const beforeNonLunch = slots.slice(0, slotIndex).filter(x => !x.lunch).length;
+
+  if (uni === 'USM'){
+    const n1 = beforeNonLunch*2 + 1;
+    const n2 = n1 + 1;
+    return `
+      <div class="mod-lines">
+        <div class="line-num">${n1}</div>
+        <div class="line-time">${s.lines[0].start}–${s.lines[0].end}</div>
+        <div class="line-num">${n2}</div>
+        <div class="line-time">${s.lines[1].start}–${s.lines[1].end}</div>
+      </div>
+    `;
+  } else {
+    const bn = beforeNonLunch + 1;
+    return `
+      <div class="mod-lines">
+        <div class="line-num">${bn}</div>
+        <div class="line-time">${s.start}–${s.end}</div>
+      </div>
+    `;
+  }
+}
+
+/* === render contenido de una celda (permite 2 por pos: left/right o 1 single) === */
+function renderCellContent(day, slot){
+  const here = items.filter(it => it.day===day && it.slot===slot);
+  if (!here.length) return '';
+
+  const renderGroup = (pos) => {
+    const group = here.filter(h => (h.pos||'full') === pos);
+    if (!group.length) return '';
+    // orden: left, single, right (para consistencia visual)
+    const sorted = group.sort((a,b)=>{
+      const order = { left:0, single:1, right:2 };
+      return (order[(a.hpos||'single')] ?? 1) - (order[(b.hpos||'single')] ?? 1);
+    });
+    return sorted.map(g => blockHtml(g, pos)).join('');
+  };
+
+  return `
+    ${renderGroup('top')}
+    ${renderGroup('full')}
+    ${renderGroup('bottom')}
+  `;
+}
+
+function blockHtml(it, pos){
+  const name = (state.courses?.find(c=>c.id===it.courseId)?.name) || 'Ramo';
+  const h = it.hpos || 'single';
+  return `
+    <div class="placed pos-${pos} h-${h}" data-id="${it.id}" title="Doble-click para eliminar">
+      <div class="placed-title">${name}</div>
+    </div>
+  `;
+}
+
+/* ---------- DnD + eliminar ---------- */
+function bindDnD(){
+  // Auto-scroll global
+  window.addEventListener('dragover', handleGlobalDragOver, { passive: true });
+  document.addEventListener('drop',  stopGlobalAutoScroll);
+  document.addEventListener('dragend', stopGlobalAutoScroll);
+
+  document.addEventListener('dragstart', (e)=>{
+    const t = e.target;
+    if (t && t.classList.contains('palette-chip')){
+      e.dataTransfer.setData('text/plain', t.dataset.courseId);
+      e.dataTransfer.effectAllowed = 'copy';
+      isDraggingChip = true;
+    }
+  });
+
+  document.addEventListener('dblclick', async (e)=>{
+    const t = e.target.closest('.placed'); if (!t) return;
+    const id = t.dataset.id; if (!id) return;
+    await deleteDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule',id));
+  });
+
+  bindCellDropZones();
+}
+
+function bindInlineRename(){
+  // Click sobre el título de un bloque (sólo en tu horario, no en el compartido)
+  document.addEventListener('click', (e)=>{
+    const titleEl = e.target.closest('.placed-title');
+    if (!titleEl) return;
+
+    // Evita edición desde la vista compartida
+    const insideMySched = titleEl.closest('#schedUSM');
+    if (!insideMySched) return;
+
+    // Evita abrir dos editores
+    if (document.querySelector('input.inline-rename')) return;
+
+    const placed = titleEl.closest('.placed');
+    if (!placed) return;
+
+    const schedId = placed.dataset.id;
+    const rec = items.find(x => x.id === schedId);
+    if (!rec) return;
+
+    const course = (state.courses || []).find(c => c.id === rec.courseId);
+    const currentName = course?.name || titleEl.textContent.trim();
+
+    // Crea input
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'inline-rename';
+    inp.value = currentName;
+    // ancho cómodo
+    const w = Math.max(titleEl.offsetWidth, 140);
+    inp.style.width = w + 'px';
+
+    // Reemplaza visualmente
+    titleEl.replaceWith(inp);
+    inp.focus();
+    inp.select();
+
+    const finish = async (save)=>{
+      // reconstruye el título
+      const newTitle = document.createElement('div');
+      newTitle.className = 'placed-title';
+      newTitle.textContent = save ? (inp.value || '').trim() : currentName;
+      inp.replaceWith(newTitle);
+
+      // Guardar si cambió y hay contexto
+      if (!save) return;
+      const newName = (inp.value || '').trim();
+      if (!newName || newName === currentName) return;
+
+      if (!state.currentUser || !state.activeSemesterId) return;
+      try{
+        const cRef = doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses', rec.courseId);
+        await updateDoc(cRef, { name: newName });
+      }catch(err){
+        console.error('rename error', err);
+        // fallback visual si falla
+        newTitle.textContent = currentName;
+        alert('No se pudo renombrar el ramo. Intenta nuevamente.');
+      }
+    };
+
+    inp.addEventListener('keydown', (ev)=>{
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    inp.addEventListener('blur', ()=> finish(true));
+  });
+}
+
+
+function bindCellDropZones(){
+  document.querySelectorAll('.cell.slot').forEach(cell=>{
+    if (cell.classList.contains('is-lunch')) return;
+
+    // Preview vertical + decide hpos por cursor (izq/centro/der)
+    cell.addEventListener('dragover', (ev)=>{
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+
+      const rect = cell.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const ratioY = y / rect.height;
+      const ratioX = x / rect.width;
+
+      let vpos = 'full';
+      if (ratioY < 0.33) vpos = 'top';
+      else if (ratioY > 0.66) vpos = 'bottom';
+
+      let hpos = 'single';
+      if (ratioX < 0.4) hpos = 'left';
+      else if (ratioX > 0.6) hpos = 'right';
+
+      cell.dataset.droppos = vpos; // vertical
+      cell.dataset.droph   = hpos; // horizontal
+      cell.classList.add('over');
+      cell.classList.toggle('hint-left',   hpos==='left');
+      cell.classList.toggle('hint-center', hpos==='single'); // “single” = centro
+      cell.classList.toggle('hint-right',  hpos==='right');
+
+      cell.classList.toggle('hint-top', vpos==='top');
+      cell.classList.toggle('hint-full', vpos==='full');
+      cell.classList.toggle('hint-bottom', vpos==='bottom');
+    });
+
+    cell.addEventListener('dragleave', ()=> clearHints(cell));
+
+    cell.addEventListener('drop', async (ev)=>{
+      ev.preventDefault();
+      const courseId = ev.dataTransfer.getData('text/plain');
+      if (!courseId) return;
+      if (!state.currentUser || !state.activeSemesterId) {
+        alert('Selecciona un semestre.'); clearHints(cell); return;
+      }
+
+      const day  = parseInt(cell.dataset.day,10);
+      const slot = parseInt(cell.dataset.slot,10);
+      const pos  = cell.dataset.droppos || 'full';
+      let   hpos = cell.dataset.droph  || 'single';
+
+      const hereAll   = items.filter(it => it.day===day && it.slot===slot);
+      const hereAtPos = hereAll.filter(it => (it.pos||'full') === pos);
+
+      // Ya hay dos en este pos → no cabe otro
+      if (hereAtPos.length >= 2){
+        alert('Esta zona ya tiene dos ramos (izq/der).'); clearHints(cell); return;
+      }
+
+      if (hereAtPos.length === 1){
+        const existing = hereAtPos[0];
+        const eH = existing.hpos || 'single';
+
+        if (hpos === 'single'){
+          alert('Ya hay un ramo aquí. Elige izquierda o derecha.');
+          clearHints(cell); return;
+        }
+
+        if (eH === 'single'){
+          // Convertimos el existente al lado opuesto del que pediste
+          const oldSide = (hpos === 'left') ? 'right' : 'left';
+          try {
+            await updateDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule', existing.id), { hpos: oldSide });
+          } catch(_){}
+          // y el nuevo queda en el lado que eligiste (hpos)
+        } else {
+          if (eH === hpos){
+            alert('Ese lado ya está ocupado. Prueba el otro lado.');
+            clearHints(cell); return;
+          }
+          // si es el lado opuesto, seguimos normal
+        }
+      }
+
+      const SLOTS = getMySlots();
+      const def = SLOTS[slot];
+      const payload = { courseId, day, slot, start: def.start, end: def.end, pos, hpos, createdAt: Date.now() };
+      const ref = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule');
+      await addDoc(ref, payload);
+
+      clearHints(cell);
+    });
+  });
+}
+
+function clearHints(cell){
+  cell.classList.remove('over','hint-top','hint-full','hint-bottom',
+                        'hint-left','hint-center','hint-right'); // ← añade estas
+  delete cell.dataset.droppos;
+  delete cell.dataset.droph;
+}
+
+
+/* ==================== VISTA COMPARTIDA ==================== */
+let unsubShared = null;
+let sharedItems = [];
+let unsubSharedCourses = null;
+let sharedCourses = [];
+let sharedSlots = USM_SLOTS;
+let sharedUni = 'USM';
+
+function renderSharedShell(){
+  const sharedHost = $('horarioCompartido');
+  if (!sharedHost) return;
+  sharedHost.innerHTML = `
+    <div class="card" style="margin-bottom:12px">
+      <div class="row" style="align-items:flex-end;gap:12px">
+        <div>
+          <label>Semestre de tu pareja</label><br/>
+          <select id="sh-semSel"></select>
+        </div>
+        <div class="muted">Elige un semestre (ej. 2025-2) para ver el horario de tu pareja en vivo.</div>
+      </div>
+    </div>
+    <div id="schedSharedUSM" class="sched-usm card"></div>
+  `;
+  buildSharedGrid();
+}
+
+function buildSharedGrid(){
+  const host = $('schedSharedUSM'); if (!host) return;
+
+  const SLOTS = sharedSlots || USM_SLOTS;
+  SHARED_CURRENT_SLOTS = SLOTS;
+
+  const headerTitle = (sharedUni==='USM') ? 'Bloque' : 'Módulo';
+
+  host.innerHTML = `
+    <div class="usm-grid2">
+      <div class="cell header">${headerTitle}</div>
+      ${DAYS.map(d=>`<div class="cell header">${d}</div>`).join('')}
+      ${SLOTS.map((s,slotIndex)=>`
+        <div class="cell mod ${s.lunch?'lunch':''}" data-slot="${slotIndex}">
+          ${renderModuleCell(s, slotIndex, sharedUni)}
+        </div>
+        ${DAYS.map((_,dayIndex)=>`
+          <div class="cell slot ${s.lunch?'is-lunch':''}"
+               data-day="${dayIndex}" data-slot="${slotIndex}">
+            ${renderSharedCell(dayIndex, slotIndex)}
+          </div>
+        `).join('')}
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderSharedCell(day, slot){
+  const theirsHere = sharedItems.filter(it => it.day===day && it.slot===slot);
+
+  const renderGroup = (pos) => {
+    const group = theirsHere.filter(h => (h.pos||'full') === pos);
+    if (!group.length) return '';
+    const sorted = group.sort((a,b)=>{
+      const order = { left:0, single:1, right:2 };
+      return (order[(a.hpos||'single')] ?? 1) - (order[(b.hpos||'single')] ?? 1);
+    });
+    return sorted.map(g => blockHtmlColored(g, pos, partnerColor, false)).join('');
+  };
+
+  return `
+    ${renderGroup('top')}
+    ${renderGroup('full')}
+    ${renderGroup('bottom')}
+  `;
+}
+
+function blockHtmlColored(it, pos, color, isMine){
+  const courseArr = isMine ? (state.courses || []) : (sharedCourses || []);
+  const name = (courseArr.find(c=>c.id===it.courseId)?.name) || 'Ramo';
+  const h = it.hpos || 'single';
+  return `
+    <div class="placed pos-${pos} h-${h}" title="${isMine ? 'Tuyo' : 'Pareja'}"
+         style="background:${color}; color:#0e0e0e; font-weight:600; border:1px solid rgba(0,0,0,0.25); margin:2px 0;">
+      <div class="placed-title">${name}</div>
+    </div>
+  `;
+}
+
+async function subscribeShared(semId){
+  if (unsubShared){ unsubShared(); unsubShared=null; }
+  if (unsubSharedCourses){ unsubSharedCourses(); unsubSharedCourses=null; }
+  if (unsubPartnerProfile){ unsubPartnerProfile(); unsubPartnerProfile=null; }
+  sharedItems = []; sharedCourses = [];
+  sharedSlots = USM_SLOTS; sharedUni = 'USM';
+  buildSharedGrid();
+
+  myColor = state.profileData?.favoriteColor || myColor;
+
+  const otherUid = state.pairOtherUid;
+  if (!otherUid || !semId) return;
+
+  const semRef = doc(db,'users',otherUid,'semesters',semId);
+  const semSnap = await getDoc(semRef);
+  const uniReadable = semSnap.exists() ? (semSnap.data().universityAtThatTime || '') : '';
+  sharedUni = uniCodeFromReadable(uniReadable);
+  sharedSlots = (sharedUni==='UMAYOR') ? MAYOR_SLOTS : USM_SLOTS;
+
+  unsubPartnerProfile = onSnapshot(doc(db,'users', otherUid), (snap)=>{
+    const d = snap.data() || {};
+    partnerColor = d.favoriteColor || partnerColor;
+    buildSharedGrid();
+  });
+
+  const coursesRef = collection(db,'users',otherUid,'semesters',semId,'courses');
+  unsubSharedCourses = onSnapshot(query(coursesRef, orderBy('name')), (snap)=>{
+    sharedCourses = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    buildSharedGrid();
+  });
+
+  const schedRef = collection(db,'users',otherUid,'semesters',semId,'schedule');
+  unsubShared = onSnapshot(query(schedRef), (snap)=>{
+    sharedItems = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    buildSharedGrid();
+  });
+}
+
+async function populateSharedSemesters(){
+  const sel = $('sh-semSel'); if (!sel) return;
+  sel.innerHTML = '<option value="">—</option>';
+  const otherUid = state.pairOtherUid; if (!otherUid) return;
+  const ref = collection(db,'users',otherUid,'semesters');
+  const snap = await getDocs(query(ref, orderBy('createdAt','desc')));
+  snap.forEach(d=>{
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = d.data().label || '—';
+    sel.appendChild(opt);
+  });
+  if (state.shared.horario.semId){
+    sel.value = state.shared.horario.semId;
+    subscribeShared(state.shared.horario.semId);
+  }
+}
