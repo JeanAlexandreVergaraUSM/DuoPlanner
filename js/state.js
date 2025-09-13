@@ -3,24 +3,37 @@ export const state = {
   currentUser: null,
   currentPairId: null,
   profileData: null,
+
   activeSemesterId: null,
   activeSemesterData: null,
+
   unsubscribeCourses: null,
   editingCourseId: null,
-  // 🔹 NUEVO: UID de la pareja (no tú)
+
+  // UID de la pareja (no tú)
   pairOtherUid: null,
-  // 🔹 NUEVO: estado para vistas compartidas (horario / notas / malla)
+
+  // Estado para vistas compartidas (horario / notas / malla / calendario)
   shared: {
-    horario: { semId: null },
-    notas:   { semId: null, courseId: null },
-    malla:   { enabled: false },
-    calendar:{ semId: null }
+    horario:  { semId: null },
+    notas:    { semId: null},
+    malla:    { enabled: false },
+    calendar: { semId: null }
   },
-  DEBUG: (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && new URLSearchParams(location.search).has('debug'),
+
+  // Debug: localhost con ?debug o bandera global window.duoplannerDebug
+  DEBUG:
+    (location.hostname === 'localhost' || location.hostname === '127.0.0.1') &&
+    (new URLSearchParams(location.search).has('debug') || (window?.duoplannerDebug ?? false)),
 };
 
-export const $ = (id)=>document.getElementById(id);
+// DOM helpers
+export const $   = (id) => (typeof id === 'string' ? document.getElementById(id) : null);
+export const qs  = (sel, root = document) => root.querySelector(sel);
+export const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+export const setText = (id, text = '') => { const el = $(id); if (el) el.textContent = text; return el; };
 
+// Debug renderer
 export function updateDebug() {
   if (!state.DEBUG) return;
   const el = $('state');
@@ -28,7 +41,6 @@ export function updateDebug() {
   el.textContent = JSON.stringify({
     uid: state.currentUser?.uid || null,
     pairId: state.currentPairId,
-    // 🔹 NUEVO: mostrar el UID de la pareja en debug
     pairOtherUid: state.pairOtherUid || null,
     profileData: state.profileData,
     activeSemesterId: state.activeSemesterId,
@@ -37,5 +49,8 @@ export function updateDebug() {
 }
 
 // UI helpers
-export function setHidden(el, hidden){ hidden ? el.classList.add('hidden') : el.classList.remove('hidden'); }
-export function confirmYes(msg){ return window.confirm(msg); }
+export function setHidden(el, hidden) {
+  if (!el) return;
+  hidden ? el.classList.add('hidden') : el.classList.remove('hidden');
+}
+export function confirmYes(msg) { return window.confirm(msg); }

@@ -2,7 +2,8 @@
 import { db } from './firebase.js';
 import { $, state, updateDebug } from './state.js';
 import {
-  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, getDoc
+  collection, addDoc, onSnapshot, doc, deleteDoc,
+  query, orderBy, getDoc, where, getDocs
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { onActiveSemesterChanged } from './schedule.js';
 import { onActiveSemesterChanged as calOnSem } from './calendar.js';
@@ -23,19 +24,29 @@ function bindUI() {
       const uniReadable = universityFromProfileReadable();
       if (!uniReadable) { alert('Completa tu universidad en Perfil.'); return; }
 
-      const label = ($('semesterLabel').value || '').trim();
+      const label = ($('semesterLabel')?.value || '').trim();
       if (!isValidLabel(label)) {
-        alert('Formato de semestre inválido. Usa AAAA-1 o AAAA-2 y desde 2025-2 en adelante.');
-        return;
-      }
+  alert('Formato de semestre inválido. Usa AAAA-1 o AAAA-2 (ej. 2025-2).');
+  return;
+}
+
 
       const ref = collection(db, 'users', state.currentUser.uid, 'semesters');
+
+// 🔹 Evita crear otro semestre con el mismo label
+const existing = await getDocs(query(ref, where('label', '==', label)));
+if (!existing.empty) {
+  alert('Ya existe un semestre con ese nombre.');
+  return;
+}
+
       await addDoc(ref, {
         label,
         universityAtThatTime: uniReadable,
         createdAt: Date.now()
       });
-      $('semesterLabel').value = '';
+      if ($('semesterLabel')) $('semesterLabel').value = '';
+      // Nota: si no hay activo, el snapshot activará el más reciente (desc).
     });
   }
 
@@ -46,12 +57,14 @@ function bindUI() {
 
     // Activar
     if (t.matches('.sem-activate')) {
+      if (!state.currentUser) { alert('Debes iniciar sesión.'); return; }
       const id = t.dataset.id;
       await setActiveSemester(id);
     }
 
     // Eliminar
     if (t.matches('.sem-delete')) {
+      if (!state.currentUser) { alert('Debes iniciar sesión.'); return; }
       const id = t.dataset.id;
       if (!confirm('¿Eliminar este semestre?')) return;
       await deleteDoc(doc(db, 'users', state.currentUser.uid, 'semesters', id));
@@ -61,7 +74,7 @@ function bindUI() {
 }
 
 export function refreshSemestersSub() {
-  // corta suscripción anterior
+  // Corta suscripción anterior
   if (unsubscribeSemesters) { unsubscribeSemesters(); unsubscribeSemesters = null; }
   if (!state.currentUser) return;
 
@@ -76,16 +89,17 @@ export function refreshSemestersSub() {
       const item = document.createElement('div');
       item.className = 'course-item';
       item.innerHTML = `
-        <div>
-          <div><b>${d.label}</b> <span class="course-meta">· ${d.universityAtThatTime}</span></div>
-        </div>
-        <div class="inline">
-          ${state.activeSemesterId === docSnap.id
-            ? '<span class="course-meta">Activo</span>'
-            : `<button class="ghost sem-activate" data-id="${docSnap.id}">Activar</button>`}
-          <button class="danger sem-delete" data-id="${docSnap.id}">Eliminar</button>
-        </div>
-      `;
+  <div>
+    <div><b>${d.label}</b> <span class="course-meta">· ${d.universityAtThatTime}</span></div>
+  </div>
+  <div class="inline">
+    ${state.activeSemesterId === docSnap.id
+      ? '<span class="course-meta">Activo</span>'
+      : `<button class="ghost sem-activate" data-id="${docSnap.id}">Activar</button>`}
+    <button class="danger sem-delete" data-id="${docSnap.id}">Eliminar</button>
+  </div>
+`;
+
       list.appendChild(item);
     });
 
@@ -105,8 +119,11 @@ export async function setActiveSemester(semId) {
   state.activeSemesterData = snap.exists() ? snap.data() : null;
 
   // Refleja en UI (tarjeta de Semestres)
-  $('activeSemesterLabel').textContent = state.activeSemesterData?.label || '—';
-  $('activeSemesterUni').textContent   = state.activeSemesterData?.universityAtThatTime || '—';
+  const lblEl = $('activeSemesterLabel');
+if (lblEl) lblEl.textContent = state.activeSemesterData?.label || '—';
+
+const uniEl = $('activeSemesterUni');
+if (uniEl) uniEl.textContent = state.activeSemesterData?.universityAtThatTime || '—';
 
   // 🔹 Refleja en UI (pestaña Notas)
   const grLabel = $('gr-activeSemLabel');
@@ -121,8 +138,7 @@ export async function setActiveSemester(semId) {
     scaleSel.disabled = true; // bloqueada porque viene de la U del semestre
   }
   if (thr) {
-    // valores típicos por defecto (puedes cambiarlos si quieres)
-    thr.value = (uniCode === 'UMAYOR') ? 4.0 : 55; 
+    thr.value = (uniCode === 'UMAYOR') ? 4.0 : 55;
   }
 
   // Habilita sección de ramos y ajusta formulario de cursos
@@ -134,32 +150,30 @@ export async function setActiveSemester(semId) {
   resetCourseForm();
   setCoursesSubscription();
 
-  // Avisar al horario y depurar
+  // Avisar al horario y calendario
   onActiveSemesterChanged();
   calOnSem?.();
   updateDebug();
 
   // Refresca la lista para que se vea "Activo"
   refreshSemestersSub();
-
-  // Si tienes lógica de notas que reacciona al cambio, puedes invocarla
-  // gradesOnSem?.(); // (si la tienes definida)
 }
-
 
 export function clearActiveSemester() {
   state.activeSemesterId = null;
   state.activeSemesterData = null;
 
   // Tarjeta Semestres
-  $('activeSemesterLabel').textContent = '—';
-  $('activeSemesterUni').textContent   = '—';
+  const lblEl = $('activeSemesterLabel');
+if (lblEl) lblEl.textContent = '—';
+  const uniEl = $('activeSemesterUni');
+if (uniEl) uniEl.textContent = '—';
   const coursesSection = $('coursesSection');
   if (coursesSection) coursesSection.classList.add('hidden');
 
   // 🔹 Pestaña Notas
   const grLabel = $('gr-activeSemLabel');
-  if (grLabel) grLabel.textContent = '—';
+if (grLabel) grLabel.textContent = '—';
   const scaleSel = $('gr-scaleSel');
   if (scaleSel) { scaleSel.value = 'USM'; scaleSel.disabled = true; }
   const thr = $('gr-passThreshold');
@@ -169,19 +183,14 @@ export function clearActiveSemester() {
   updateDebug();
 }
 
-
 /* ---------- helpers ---------- */
 
+// Reemplaza la función actual
 function isValidLabel(str) {
-  // AAAA-1 o AAAA-2 y desde 2025-2 en adelante
-  const m = /^(\d{4})-(1|2)$/.exec(str);
-  if (!m) return false;
-  const year = parseInt(m[1], 10);
-  const term = parseInt(m[2], 10);
-  if (year < 2025) return false;
-  if (year === 2025 && term < 2) return false;
-  return true;
+  // Solo formato AAAA-1 o AAAA-2, sin restricciones de año
+  return /^\d{4}-(1|2)$/.test(str || '');
 }
+
 
 function universityFromProfileReadable() {
   const d = state.profileData;

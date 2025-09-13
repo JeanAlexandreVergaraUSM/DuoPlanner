@@ -262,15 +262,15 @@ function parseIctelCSV(text){
         .replace(/[^a-z0-9]+/g,' ').trim();
       norm[nk] = (v||'').trim();
     }
-    const pick = (...aliases)=>{
-      for (const a of aliases){
-        const na = a.toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-          .replace(/[^a-z0-9]+/g,' ').trim();
-        if (na in norm && norm[na]) return norm[na];
-      }
-      return '';
-    };
+    const pick = (...aliases) => {
+  for (const a of aliases) {
+    const na = a.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]+/g,' ').trim();
+    if (na in norm && norm[na]) return norm[na];
+  }
+  return '';
+};
 
     const numeroStr = pick('Número','Numero','Nº','N°','num','n');
     const numero    = parseInt(numeroStr,10) || null;
@@ -708,7 +708,7 @@ function setupPartnerToggle(){
   bar.innerHTML = `
     <label class="pill">
       <input type="checkbox" id="malla-view-partner" style="margin-right:8px"/>
-      Ver malla de mi pareja (solo lectura)
+      Ver malla de la otra personas (solo lectura)
     </label>
   `;
   host.prepend(bar);
@@ -788,8 +788,8 @@ function watchPartnerMalla(){
 
     // 4) Caption “vista de tu pareja”
     const caption = $('malla-caption');
-    if (caption && partnerCareer && !caption.textContent.includes('vista de tu pareja')){
-      caption.textContent = `${CAREER_NAMES[partnerCareer] || partnerCareer} · (vista de tu pareja)`;
+    if (caption && partnerCareer && !caption.textContent.includes('vista de la otra persona')){
+      caption.textContent = `${CAREER_NAMES[partnerCareer] || partnerCareer} · (vista de la otra persona)`;
     }
   }, (_err)=>{
     // ante error, volver a tu malla
@@ -816,7 +816,7 @@ async function forceRenderCareer(careerCode){
 
   // Ajusta caption para modo pareja
   const caption = $('malla-caption');
-  caption.textContent = `${CAREER_NAMES[careerCode] || careerCode} · (vista de tu pareja)`;
+  caption.textContent = `${CAREER_NAMES[careerCode] || careerCode} · (vista de la otra persona)`;
 
   setPartnerReadonly(true);            // 🔒 asegurar solo-lectura aquí también
 

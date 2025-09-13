@@ -294,11 +294,11 @@ function mountModal(){
   if ($('calModal')) return;
   const wrapper = document.createElement('div');
   wrapper.id = 'calModal';
-  wrapper.className = 'modal hidden';
-  wrapper.innerHTML = `
-    <div class="modal-backdrop" id="calModalBackdrop"></div>
-    <div class="modal-card">
-      <h3 style="margin-top:0">Nuevo evento</h3>
+wrapper.className = 'modal'; // ← sin 'hidden'
+wrapper.innerHTML = `
+  <div class="modal-backdrop" id="calModalBackdrop"></div>
+  <div class="modal-content">  <!-- ← coincide con tu CSS -->
+    <h3 style="margin-top:0">Nuevo evento</h3>
       <div class="row" style="gap:10px">
         <div style="flex:1">
           <label>Título</label>
@@ -338,9 +338,10 @@ function mountModal(){
   `;
   document.body.appendChild(wrapper);
 
-  const close = () => wrapper.classList.add('hidden');
-  $('calModalBackdrop').addEventListener('click', close);
-  $('calEvtCancel').addEventListener('click', close);
+  const close = () => wrapper.classList.remove('active');
+$('calModalBackdrop').addEventListener('click', close);
+$('calEvtCancel').addEventListener('click', close);
+
 
   $('calEvtSave').addEventListener('click', async ()=>{
     if (!state.currentUser || !state.activeSemesterId){
@@ -385,7 +386,8 @@ function openModalFor(dateStr){
       sel.appendChild(opt);
     });
   }
-  $('calModal').classList.remove('hidden');
+  $('calModal').classList.add('active'); // ← ahora sí se muestra y acepta clics
+
 }
 
 /* ================= Construcción del mes – PROPIO ================= */

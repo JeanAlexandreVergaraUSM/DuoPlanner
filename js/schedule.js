@@ -9,6 +9,7 @@ import {
 let myColor = '#22c55e';
 let partnerColor = '#ff69b4';
 let unsubPartnerProfile = null;
+let schedBooted = false;
 
 // 🟦 Auto-scroll durante drag
 let isDraggingChip = false;
@@ -138,6 +139,10 @@ let items = []; // { id, courseId, day, slot, start, end, pos, hpos, displayName
 
 /* ==================== INIT ==================== */
 export function initSchedule(){
+
+  if (schedBooted) return;   // ⬅️ evita doble init
+  schedBooted = true;
+
   renderShell();
 bindDnD();
 bindInlineRename();
@@ -169,7 +174,7 @@ bindRightClickRoom();
   }
   function showCompartido(){
     if (tabComp?.getAttribute('aria-disabled') === 'true'){
-      alert('Debes emparejarte primero para ver el horario de tu pareja.');
+      alert('Debes emparejarte primero para ver el horario de la otra persona.');
       return;
     }
     tabComp?.classList.add('active'); tabProp?.classList.remove('active');
@@ -191,6 +196,13 @@ bindRightClickRoom();
   tabProp?.addEventListener('click', showPropio);
   tabComp?.addEventListener('click', showCompartido);
   showPropio();
+
+document.addEventListener('courses:changed', () => {
+    console.log('[horario] courses:changed → refrescar paleta/grilla');
+    renderPalette();
+    renderGrid();
+  });
+
 }
 
 export function onActiveSemesterChanged(){
@@ -200,7 +212,7 @@ export function onActiveSemesterChanged(){
   if (!state.currentUser || !state.activeSemesterId) return;
   const ref = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule');
   unsubscribeSchedule = onSnapshot(query(ref), (snap)=>{
-    items = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderGrid();
   });
 }
@@ -231,32 +243,31 @@ function renderShell(){
 
 export function refreshCourseOptions(){ renderPalette(); renderGrid(); }
 
+// --- en renderPalette(), añade defensivo ---
 function renderPalette(){
   const pal = $('coursePalette');
   if (!pal) return;
   pal.innerHTML = '';
-  if (!state.courses || state.courses.length===0){
+  const list = Array.isArray(state.courses) ? state.courses : []; // ⬅️
+  if (list.length===0){
     pal.innerHTML = `<div class="muted">No hay ramos en el semestre activo.</div>`;
     return;
   }
-  state.courses.forEach(c=>{
+  list.forEach(c=>{
     const chip = document.createElement('div');
     chip.className = 'palette-chip';
     chip.setAttribute('draggable','true');
     chip.dataset.courseId = c.id;
     chip.textContent = c.name;
 
-    // pinta el chip usando el color del ramo
     const col = isValidHex(c.color) ? c.color : '#3B82F6';
     chip.style.borderColor = col;
     chip.style.boxShadow = 'inset 0 0 0 2px rgba(0,0,0,.15)';
-    // si prefieres relleno:
-    // chip.style.background = col;
-    // chip.style.color = bestText(col);
-
     pal.appendChild(chip);
   });
 }
+
+
 
 function renderGrid(){
   const host = $('schedUSM');
@@ -386,10 +397,24 @@ function bindDnD(){
   });
 
   document.addEventListener('dblclick', async (e)=>{
-    const t = e.target.closest('.placed'); if (!t) return;
-    const id = t.dataset.id; if (!id) return;
-    await deleteDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule',id));
-  });
+  const t = e.target.closest('.placed'); 
+  if (!t) return;
+  if (!state.currentUser || !state.activeSemesterId) return; // ⬅️ guard
+
+  const id = t.dataset.id; 
+  if (!id) return;
+  try{
+    await deleteDoc(doc(
+      db,
+      'users', state.currentUser.uid,
+      'semesters', state.activeSemesterId,
+      'schedule', id
+    ));
+  }catch(err){
+    console.error(err);
+    alert('No se pudo eliminar el bloque.');
+  }
+});
 
   bindCellDropZones();
 }
@@ -626,10 +651,10 @@ function renderSharedShell(){
     <div class="card" style="margin-bottom:12px">
       <div class="row" style="align-items:flex-end;gap:12px">
         <div>
-          <label>Semestre de tu pareja</label><br/>
+          <label>Semestre de la otra persona</label><br/>
           <select id="sh-semSel"></select>
         </div>
-        <div class="muted">Elige un semestre (ej. 2025-2) para ver el horario de tu pareja en vivo.</div>
+        <div class="muted">Elige un semestre (ej. 2025-2) para ver el horario de la otra persona en vivo.</div>
       </div>
     </div>
     <div id="schedSharedUSM" class="sched-usm card"></div>
@@ -747,20 +772,81 @@ async function subscribeShared(semId){
   });
 }
 
+let _lastPopulateToken = 0;
+
 async function populateSharedSemesters(){
-  const sel = $('sh-semSel'); if (!sel) return;
-  sel.innerHTML = '<option value="">—</option>';
-  const otherUid = state.pairOtherUid; if (!otherUid) return;
-  const ref = collection(db,'users',otherUid,'semesters');
-  const snap = await getDocs(query(ref, orderBy('createdAt','desc')));
-  snap.forEach(d=>{
-    const opt = document.createElement('option');
-    opt.value = d.id;
-    opt.textContent = d.data().label || '—';
-    sel.appendChild(opt);
+  const sel = $('sh-semSel');
+  if (!sel) return;
+
+  const myToken = ++_lastPopulateToken;
+
+  // normalizador y canonizador
+  const norm = s => String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  const canon = s => {
+    const t = norm(s);
+    // acepta variantes con guiones/espacios raros, toma AAAA y term al final
+    const m = t.replace(/[^\d\-\/ ]+/g,'').match(/(\d{4})\D*([12])$/);
+    return m ? `${m[1]}-${m[2]}` : t.toLowerCase();
+  };
+
+  const parseYT = label => {
+    const m = /^(\d{4})-(1|2)$/.exec(canon(label));
+    return m ? { y: parseInt(m[1],10), t: parseInt(m[2],10) } : { y: -Infinity, t: -Infinity };
+  };
+
+  // limpiar select
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = '— seleccionar —';
+  sel.appendChild(opt0);
+
+  if (!state.pairOtherUid) return;
+
+  // traer semestres (no importa el orden aquí; ordenaremos por label)
+  const ref = collection(db, 'users', state.pairOtherUid, 'semesters');
+  const snap = await getDocs(query(ref));
+  if (myToken !== _lastPopulateToken) return;
+
+  // dedup por label canonizado y armar lista
+  const byKey = new Map(); // key canon → {id,labelToShow,y,t}
+  snap.forEach(d => {
+    const data = d.data() || {};
+    const shown = norm(data.label || d.id);
+    const key   = canon(shown);
+    if (!byKey.has(key)) {
+      const { y, t } = parseYT(shown);
+      byKey.set(key, { id: d.id, labelToShow: shown, y, t });
+    }
   });
-  if (state.shared.horario.semId){
-    sel.value = state.shared.horario.semId;
-    subscribeShared(state.shared.horario.semId);
+
+  // ordenar por año desc, término desc
+  const options = Array.from(byKey.values()).sort((a,b)=>{
+    if (a.y !== b.y) return b.y - a.y;
+    return b.t - a.t;
+  });
+
+  // pintar
+  const frag = document.createDocumentFragment();
+  for (const { id, labelToShow } of options) {
+    const opt = document.createElement('option');
+    opt.value = id;            // siempre el id para suscripciones
+    opt.textContent = labelToShow;
+    frag.appendChild(opt);
+  }
+  sel.appendChild(frag);
+
+  // preservar selección previa; si no existe, tomar la primera válida (la más reciente)
+  const prev = state.shared?.horario?.semId || '';
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    const firstValid = Array.from(sel.options).find(o => o.value);
+    sel.value = firstValid ? firstValid.value : '';
+    state.shared.horario.semId = sel.value || null;
   }
 }

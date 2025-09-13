@@ -1,165 +1,192 @@
-import { refreshCourseOptions } from './schedule.js';
+// js/courses.js
 import { db } from './firebase.js';
-import { $, state, updateDebug } from './state.js';
-import { onCoursesChanged as gradesOnCourses } from './grades.js';
+import { $, state } from './state.js';
 import {
-  collection, onSnapshot, orderBy, query, addDoc, doc, updateDoc, deleteDoc
+  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, setDoc, getDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { onCoursesChanged as gradesOnCourses } from './grades.js';
 
-export function initCourses(){
-  $('saveCourseBtn')?.addEventListener('click', saveCourse);
-  $('cancelEditBtn')?.addEventListener('click', resetCourseForm);
-const cc = $('courseColor'), ccCode = $('courseColorCode');
-if (cc && ccCode){
-  cc.addEventListener('input', ()=> { ccCode.textContent = (cc.value || '').toUpperCase(); });
-}}
+// Escala por defecto según la universidad del semestre activo
+let defaultCourseScale = 'USM';
 
-export function updateFormForUniversity(uni){
-  const sectParLabel = $('sectParLabel');
-  const courseScale  = $('courseScale');
-  const scaleHint    = $('scaleHint');
-  if (!sectParLabel || !courseScale || !scaleHint) return;
 
-  const isUMayor = (uni==='UMAYOR' || uni==='Universidad Mayor');
-  const isUSM    = (uni==='USM'    || uni==='UTFSM');
+/* ===== API pública ===== */
+export function initCourses(){ bindUI(); }
+export function setCoursesSubscription(){ subscribeCourses(); }
+export function resetCourseForm(){ _resetCourseForm(); }
 
-  sectParLabel.textContent = isUMayor ? 'Sección' : isUSM ? 'Paralelo' : 'Sección/Paralelo';
 
-  if (isUMayor){
-    courseScale.value='MAYOR'; courseScale.disabled=true; scaleHint.textContent='Escala fija: 1–7';
-  } else if (isUSM){
-    courseScale.value='USM'; courseScale.disabled=true; scaleHint.textContent='Escala fija: 0–100';
-  } else {
-    courseScale.disabled=false; scaleHint.textContent='Selecciona la escala para esta universidad.';
+export function updateFormForUniversity(uniCode){
+  // Determina escala por universidad
+  defaultCourseScale = (uniCode === 'UMAYOR') ? 'MAYOR' : 'USM';
+
+  // Ajusta etiqueta de Sección/Paralelo
+  const lbl = $('sectParLabel');
+  if (lbl) lbl.textContent = (uniCode === 'USM') ? 'Paralelo' : 'Sección/Paralelo';
+
+  // Si por alguna razón aún existe el select de escala en el DOM, lo ocultamos/inhabilitamos
+  const scaleSel = $('courseScale');
+  const field = scaleSel?.closest?.('.form-field');
+  if (field) field.classList.add('hidden');
+  if (scaleSel){ scaleSel.value = defaultCourseScale; scaleSel.disabled = true; }
+
+  // Hint opcional (si existe en tu HTML)
+  const hint = $('scaleHint');
+  if (hint){
+    hint.textContent = (defaultCourseScale === 'MAYOR')
+      ? 'Escala: UMayor (1–7) · tomada desde tu Perfil'
+      : 'Escala: USM (0–100) · tomada desde tu Perfil';
   }
 }
 
-export function setCoursesSubscription(){
-  // limpia subs anterior
-  if (state.unsubscribeCourses){ state.unsubscribeCourses(); state.unsubscribeCourses=null; }
-  if (!state.currentUser || !state.activeSemesterId) return;
 
-  const list = $('coursesList');
-  const coursesRef = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses');
+/* ===== Estado local ===== */
+let unsubscribeCourses = null;
 
-  state.unsubscribeCourses = onSnapshot(query(coursesRef, orderBy('name')), (snap)=>{
-    if (list) list.innerHTML='';
-    // spread correcto + orden por nombre
-    state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    refreshCourseOptions();
-    gradesOnCourses?.(); // notificar a Notas
+/* ===== UI ===== */
+function bindUI(){
+  const saveBtn   = $('saveCourseBtn');
+  const cancelBtn = $('cancelEditBtn');
 
-    snap.forEach(docSnap=>{
-      const c = docSnap.data();
-      const item = document.createElement('div'); item.className='course-item';
+  // color -> muestra hex
+  const colorInp = $('courseColor');
+  const colorCode = $('courseColorCode');
+  colorInp?.addEventListener('input', () => {
+    if (colorCode) colorCode.textContent = colorInp.value.toUpperCase();
+  });
 
-      const left = document.createElement('div');
-      const sectParText = $('sectParLabel')?.textContent || 'Sección/Paralelo';
-      left.innerHTML =
-        `<div><b>${escapeHtml(c.name)}</b> <span class="course-meta">(${escapeHtml(c.code || 's/código')})</span></div>
-         <div class="course-meta">${escapeHtml(c.professor || 'sin profesor')} · ${sectParText}: ${escapeHtml(c.sectPar || '-')} · Escala: ${escapeHtml(c.scale)}</div>`;
+  // guardar (crear/editar)
+  saveBtn?.addEventListener('click', async () => {
+    await saveCourse();
+  });
 
-      const right = document.createElement('div');
-      const editBtn = document.createElement('button'); editBtn.className='ghost'; editBtn.textContent='Editar';
-      const delBtn  = document.createElement('button'); delBtn.className='danger'; delBtn.textContent='Eliminar';
+  // cancelar edición
+  cancelBtn?.addEventListener('click', () => _resetCourseForm());
 
-      editBtn.addEventListener('click', ()=> startEditCourse(docSnap.id,c));
-      delBtn.addEventListener('click', ()=> deleteCourse(docSnap.id));
+  // delegación: editar / eliminar
+  document.addEventListener('click', async (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLElement)) return;
 
-      right.appendChild(editBtn); right.appendChild(delBtn);
-      item.appendChild(left); item.appendChild(right);
-      list?.appendChild(item);
-    });
+    // editar
+    if (t.matches('.course-edit')) {
+      const id = t.dataset.id;
+      if (!id || !state.currentUser || !state.activeSemesterId) return;
+      const ref = doc(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses', id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return;
+      const d = snap.data();
+      $('courseName').value       = d.name || '';
+      $('courseCode').value       = d.code || '';
+      $('courseProfessor').value  = d.professor || '';
+      $('courseSectPar').value    = d.section || '';
+      $('courseColor').value      = d.color || '#3B82F6';
+      $('courseColorCode').textContent = (d.color || '#3B82F6').toUpperCase();
+      state.editingCourseId = id;
+      $('saveCourseBtn').textContent = 'Guardar cambios';
+      $('cancelEditBtn')?.classList.remove('hidden');
+    }
+
+    // eliminar
+    if (t.matches('.course-del')) {
+      const id = t.dataset.id;
+      if (id) await deleteCourse(id);
+    }
   });
 }
 
-function isValidHex(s){ return typeof s==='string' && /^#[0-9A-Fa-f]{6}$/.test(s); }
+/* ===== Suscripción ===== */
+function subscribeCourses(){
+  // corta anterior
+  if (unsubscribeCourses){ unsubscribeCourses(); unsubscribeCourses = null; }
+    if (!state.currentUser || !state.activeSemesterId) {
+    // deja paleta vacía cuando no hay semestre
+    state.courses = [];
+    document.dispatchEvent(new Event('courses:changed'));
+    return;
+  }
 
 
-function startEditCourse(id, data){
-  state.editingCourseId = id;
-  $('courseName')?.setAttribute('value',''); // evita autofill extraño en algunos navegadores
-  $('courseName').value = data.name || '';
-  $('courseCode').value = data.code || '';
-  $('courseProfessor').value = data.professor || '';
-  $('courseSectPar').value = data.sectPar || '';
-  if ($('courseScale')) $('courseScale').value = data.scale || $('courseScale').value;
-  $('courseColor') && ($('courseColor').value = isValidHex(data.color) ? data.color : '#3B82F6');
-  $('courseColorCode') && ($('courseColorCode').textContent = ( $('courseColor').value || '#3B82F6').toUpperCase());
+  const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
+  unsubscribeCourses = onSnapshot(query(ref, orderBy('createdAt', 'desc')), (snap) => {
+    // ✅ publicar en estado para que Horario pueda leerlos
+    state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    console.log('[courses] snapshot ->', state.courses.length, state.courses);
 
+    renderCourses(snap);
+    gradesOnCourses?.();
 
-  const saveBtn = $('saveCourseBtn'), cancelBtn = $('cancelEditBtn');
-  if (saveBtn) saveBtn.textContent = 'Guardar cambios';
-  cancelBtn?.classList.remove('hidden');
-
-  const sec = $('coursesSection');
-  if (sec) window.scrollTo({ top: sec.offsetTop-40, behavior:'smooth' });
-
-  updateDebug();
+    // 🔔 avisar al Horario (paleta + grilla)
+    document.dispatchEvent(new Event('courses:changed'));
+  });
 }
 
-export function resetCourseForm(){
-  state.editingCourseId = null;
-  if ($('courseName'))      $('courseName').value='';
-  if ($('courseCode'))      $('courseCode').value='';
-  if ($('courseProfessor')) $('courseProfessor').value='';
-  if ($('courseSectPar'))   $('courseSectPar').value='';
-  if ($('courseColor')) $('courseColor').value = '#3B82F6';
-  if ($('courseColorCode')) $('courseColorCode').textContent = '#3B82F6';
-  const saveBtn = $('saveCourseBtn'), cancelBtn = $('cancelEditBtn');
-  if (saveBtn)  saveBtn.textContent='Agregar ramo';
-  cancelBtn?.classList.add('hidden');
-  updateDebug();
+function renderCourses(snap){
+  const host = $('coursesList');
+  if (!host) return;
+  host.innerHTML = '';
+  snap.forEach(docSnap => {
+    const d = docSnap.data();
+    const item = document.createElement('div');
+    item.className = 'course-item';
+    item.innerHTML = `
+      <div>
+        <div><b>${escapeHtml(d.name || 'Sin nombre')}</b> <span class="course-meta">· ${escapeHtml(d.code || '')}</span></div>
+        <div class="course-meta">${escapeHtml(d.professor || '')}</div>
+      </div>
+      <div class="inline">
+        <button class="ghost course-edit" data-id="${docSnap.id}">Editar</button>
+        <button class="danger course-del"  data-id="${docSnap.id}">Eliminar</button>
+      </div>
+    `;
+    host.appendChild(item);
+  });
 }
 
+/* ===== CRUD ===== */
 async function saveCourse(){
-  if (!state.currentUser || !state.activeSemesterId){ alert('Selecciona un semestre.'); return; }
-  const name = $('courseName')?.value.trim();
-  if (!name){ alert('El nombre del ramo es obligatorio.'); return; }
+  if (!state.currentUser || !state.activeSemesterId) {
+    alert('Primero inicia sesión y selecciona/crea un semestre.');
+    return;
+  }
 
-  const code      = $('courseCode')?.value.trim()      || '';
-  const professor = $('courseProfessor')?.value.trim() || '';
-  const sectPar   = $('courseSectPar')?.value.trim()   || '';
-  const uni       = state.activeSemesterData?.universityAtThatTime || '';
-
-  // escala final (por universidad)
-  let finalScale  = $('courseScale')?.value || 'USM';
-  if (uni==='UMAYOR' || uni==='Universidad Mayor') finalScale='MAYOR';
-  else if (uni==='USM' || uni==='UTFSM') finalScale='USM';
-
-  const colorPick = $('courseColor')?.value || '';
-  const color = isValidHex(colorPick) ? colorPick : null;
+  const name      = ($('courseName')?.value || '').trim();
+  const code      = ($('courseCode')?.value || '').trim();
+  const professor = ($('courseProfessor')?.value || '').trim();
+  const section   = ($('courseSectPar')?.value || '').trim();
+const color     = ($('courseColor')?.value || '#3B82F6').trim();
+// escala viene de la universidad del semestre activo
+const scale     = defaultCourseScale;
 
 
-  const payload = {
-    name, color,
-    code: code || null,
-    professor: professor || null,
-    sectPar: sectPar || null,
-    scale: finalScale,
-    createdAt: Date.now(),
-  };
+  if (!name){ alert('Ingresa el nombre del ramo.'); return; }
 
-  const saveBtn = $('saveCourseBtn');
+  const saveBtn   = $('saveCourseBtn');
   const cancelBtn = $('cancelEditBtn');
   if (saveBtn) saveBtn.disabled = true;
 
   try{
-    const coursesRef = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses');
+    const base = { name, code, professor, section, scale, color, createdAt: Date.now() };
 
-    if (!state.editingCourseId){
-      await addDoc(coursesRef, payload);
+    if (state.editingCourseId){
+      // update
+      const ref = doc(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses', state.editingCourseId);
+      await setDoc(ref, base, { merge: true });
     } else {
-      await updateDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses',state.editingCourseId), payload);
+      // create
+      const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
+      await addDoc(ref, base);
     }
-    resetCourseForm();
+
+    _resetCourseForm();
     gradesOnCourses?.(); // notificar a Notas tras guardar
   } catch(e){
     console.error(e);
     alert(`No se pudo guardar el ramo: ${e?.message || e}`);
-  } finally{
+  } finally {
     if (saveBtn) saveBtn.disabled = false;
-    cancelBtn?.classList.remove('hidden');
+    // al terminar una edición, el botón "Cancelar" se oculta
+    cancelBtn?.classList.add('hidden');
   }
 }
 
@@ -169,15 +196,27 @@ async function deleteCourse(id){
 
   try{
     await deleteDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses',id));
-    if (state.editingCourseId===id) resetCourseForm();
-    gradesOnCourses?.(); // notificar a Notas tras eliminar
+    if (state.editingCourseId===id) _resetCourseForm();
+    gradesOnCourses?.();
   } catch(e){
     console.error(e);
     alert(`No se pudo eliminar: ${e?.message || e}`);
   }
 }
 
-/* util pequeño para evitar XSS en nombres/códigos */
+/* ===== Utils ===== */
+function _resetCourseForm(){
+  state.editingCourseId = null;
+  const name = $('courseName');       if (name) name.value = '';
+  const code = $('courseCode');       if (code) code.value = '';
+  const prof = $('courseProfessor');  if (prof) prof.value = '';
+  const sect = $('courseSectPar');    if (sect) sect.value = '';
+  const color= $('courseColor');      if (color) color.value = '#3B82F6';
+  const colorCode = $('courseColorCode'); if (colorCode) colorCode.textContent = '#3B82F6';
+  const saveBtn = $('saveCourseBtn'); if (saveBtn) saveBtn.textContent = 'Agregar ramo';
+  $('cancelEditBtn')?.classList.add('hidden');
+}
+
 function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, s=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[s]));
 }

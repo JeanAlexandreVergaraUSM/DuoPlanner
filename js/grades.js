@@ -1,10 +1,10 @@
-
 import { db } from './firebase.js';
-import { $, state } from './state.js';
+import { $, state, setHidden } from './state.js';
 import {
-  collection, doc, getDoc, setDoc, updateDoc, onSnapshot,
-  addDoc, deleteDoc, query, orderBy, getDocs
+  collection, query, orderBy, getDocs, onSnapshot, doc, getDoc,
+  addDoc, updateDoc, deleteDoc, setDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
 
 
 let currentCourseId = null;
@@ -40,19 +40,40 @@ function bindUi(){
   });
   $('gr-courseSel')?.addEventListener('change', onCourseChange);
 
-  $('gr-addComp')?.addEventListener('click', addComponentPrompt);
+$('gr-addEvalBtn')?.addEventListener('click', addEvalFromForm);
+
 
   // Crear la sección Reglas dentro de #page-notas (aunque esté oculta)
   ensureRulesUI();
 
   // 🔹 Panel "Notas de tu pareja" como pestaña
-  bindPartnerPanelUi();
   document.addEventListener('pair:ready', grpPopulateSemesters); // llena select cuando hay pair
+
+  // ⬇️ Recalcula al tipear en la fórmula
+// ⬇️ recalcula y AUTOGUARDA con debounce
+const f = $('gr-finalExpr');
+if (f){
+  const debouncedSave = debounce(async ()=>{ await saveExpr(); }, 600);
+  f.addEventListener('input', ()=>{
+    header.finalExpr = normalizeExpr(f.value || '');
+    computeAndRender();
+    debouncedSave();               // ← guarda a los 600 ms desde el último tecleo
+  });
+  f.addEventListener('blur', ()=> saveExpr()); // ← por si el usuario deja de tipear y hace click afuera
+  f.addEventListener('keydown', (e)=>{
+    if (e.key === 'Enter'){ e.preventDefault(); saveExpr(); }
+  });
+}
+
+
 
     // ===== Autocomplete para final(...) y finalCode(...) en la fórmula =====
   setupFinalAutocomplete();
 
 }
+
+function setupFinalAutocomplete(){ /* TODO: implementar */ }
+
 
 
 /* ======= Helpers UI ======= */
@@ -73,7 +94,8 @@ function ensureRulesUI(){
   if (!pageNotas) return; // por si el HTML cambia
 
   // Intentamos ubicarlo justo antes del card de "Resultado" dentro de Notas
-  const resultCardInNotas = pageNotas.querySelector('.card:has(.gr-result)');
+  let resultCardInNotas = null;
+ try { resultCardInNotas = pageNotas.querySelector('.card:has(.gr-result)'); } catch(_) {}
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -174,60 +196,84 @@ async function loadGradingDoc(){
   if (!readyPath()) return;
 
   const gRef = gradingDocRef();
-  const courseRef  = doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses',currentCourseId);
+  const courseRef = doc(
+    db, 'users', state.currentUser.uid,
+    'semesters', state.activeSemesterId,
+    'courses', currentCourseId
+  );
 
-  // escala detectada por ramo o universidad
-  const courseSnap = await getDoc(courseRef);
+  // 1) Escala declarada en el ramo (si existe)
+  const courseSnap  = await getDoc(courseRef);
   const courseScale = courseSnap.exists() ? (courseSnap.data().scale || null) : null;
-  const uni = state.activeSemesterData?.universityAtThatTime || '';
-  const uniScale = (uni==='UMAYOR' || uni==='Universidad Mayor') ? 'MAYOR'
-                 : (uni==='USM'    || uni==='UTFSM')            ? 'USM'
-                 : 'USM';
 
+  // 2) Escala por universidad del semestre (fallback si el ramo no define)
+  const uniReadable = state.activeSemesterData?.universityAtThatTime || '';
+  const uniScale = /mayor/i.test(uniReadable) ? 'MAYOR'
+                : /usm|utfsm|santa\s*mar/i.test(uniReadable) ? 'USM'
+                : 'USM';
+
+  // 3) Trae meta; si no existe, crea con escala detectada
   const snap = await getDoc(gRef);
   if (snap.exists()){
     header = { finalExpr: '', rulesText: '', ...snap.data() };
   } else {
-    header = {
-      scale: courseScale || uniScale,
-      finalExpr: '',
-      rulesText: ''
-    };
+    header = { scale: courseScale || uniScale, finalExpr: '', rulesText: '' };
     await setDoc(gRef, header);
   }
 
-  // si el ramo tiene scale, forzar coherencia
-  if (courseScale && header.scale !== courseScale){
-    header.scale = courseScale;
+  // 4) Forzar coherencia:
+  //    - Si el ramo declara escala -> usar esa
+  //    - Si NO declara y meta trae otra -> corregir a la de la uni
+  let expected = courseScale || uniScale;
+  if (header.scale !== expected){
+    header.scale = expected;
     await updateDoc(gRef, { scale: header.scale });
   }
 
-  // UI
+  // 5) Refrescar UI básica
   $('gr-activeSemLabel') && ($('gr-activeSemLabel').textContent = state.activeSemesterData?.label || '—');
-  $('gr-scaleSel').value = header.scale || 'USM';
-  $('gr-finalExpr').value = header.finalExpr || '';
+  const scaleSel = $('gr-scaleSel');
+  if (scaleSel) scaleSel.value = header.scale || 'USM';
+  const exprEl = $('gr-finalExpr');
+  if (exprEl) exprEl.value = header.finalExpr || '';
   const rt = $('gr-rulesText');
   if (rt) rt.value = header.rulesText || '';
+
+  // 6) Ajustar límites del input según escala (1–7 o 0–100)
+  //    y redibujar componentes para aplicar step/min/max correctos
+  const isMayor = (header.scale === 'MAYOR');
+  const min  = isMayor ? 1 : 0;
+  const max  = isMayor ? 7 : 100;
+  const step = isMayor ? 0.01 : 0.1; // ajusta si quieres otro salto
+  // re-render para que los <input type="number"> tomen estos valores
+  renderComponents();
+  // (renderComponents ya usa header.scale para min/max/step)
 
   computeAndRender();
 }
 
+
 async function saveExpr(){
   if (!readyPath()) return;
-  const raw = ($('gr-finalExpr').value || '').trim();
-  const expr = normalizeExpr(raw);        // ← conserva 20%
+  const el   = $('gr-finalExpr');
+  const snap = el ? el.value : '';
+  const raw  = (snap || '').trim();
+  const expr = normalizeExpr(raw) || null;
+
   header.finalExpr = expr;
   await updateDoc(gradingDocRef(), { finalExpr: expr });
   await rebuildCrossFinals();
 
-  $('gr-finalExpr').value = expr;         // no lo cambiamos a (20/100)
+  // ⚠️ NO reescribas el input; evita pisar lo que el usuario escribió durante el await
+  // if (el && el.value === snap) el.value = expr ?? '';  // <- si quieres, deja esta guardia
   computeAndRender();
 }
 
+
 async function saveRules(){
   if (!readyPath()) return;
-  const txt = ($('gr-rulesText').value || '').trim();
-  header.rulesText = txt;
+  const txt = ($('gr-rulesText').value || '').trim() || null;
+ header.rulesText = txt;
   await updateDoc(gradingDocRef(), { rulesText: txt });
   await rebuildCrossFinals();
 
@@ -254,6 +300,53 @@ async function watchComponents(){
     }
   );
 }
+
+async function addEvalFromForm(){
+  if (!readyPath()) {
+    alert('Selecciona un semestre y un ramo.');
+    return;
+  }
+
+  const nameEl = $('gr-evalName');
+  const codeEl = $('gr-evalCode');
+  const scoreEl = $('gr-evalScore');
+
+  const name = (nameEl?.value || '').trim();
+  let   key  = (codeEl?.value || '').trim();
+  const scoreRaw = scoreEl?.value ?? '';
+
+  if (!name) { alert('Escribe un nombre.'); return; }
+  if (!key)  { alert('Escribe un código (ej: C1, T1...).'); return; }
+
+  // normaliza código (A–Z, 0–9, _), máx 16
+  key = key.replace(/\s+/g,'').replace(/[^A-Za-z0-9_]/g,'').slice(0,16);
+  if (!key) { alert('Código inválido.'); return; }
+
+  // evitar choque con existentes
+  key = ensureUniqueKey(key, components);
+
+  // escala para límites
+  const isMayor = (header.scale === 'MAYOR');
+  const min = isMayor ? 1   : 0;
+  const max = isMayor ? 7   : 100;
+  const v   = parseFloat(String(scoreRaw).replace(',','.'));
+  const score = isNaN(v) ? null : clamp(v, min, max);
+
+  await addDoc(componentsColRef(), {
+    key,
+    name,
+    score,
+    createdAt: Date.now()
+  });
+
+  // limpiar formulario
+  if (nameEl)  nameEl.value  = '';
+  if (codeEl)  codeEl.value  = '';
+  if (scoreEl) scoreEl.value = '';
+
+  // onSnapshot refresca lista y cálculo
+}
+
 
 async function addComponentPrompt(){
   if (!readyPath()) return;
@@ -307,78 +400,62 @@ function ensureUniqueKey(base, comps){
 /* Render UI de componentes */
 
 function renderComponents(){
-  const host = $('gr-components');
+  const host = $('gr-evalsList');   // <- ahora usa el contenedor de tu HTML
   if (!host) return;
   host.innerHTML = '';
+
   if (!currentCourseId){
     host.innerHTML = `<div class="muted">Selecciona un ramo.</div>`;
     return;
   }
   if (!components.length){
-    host.innerHTML = `<div class="muted">Agrega componentes con el botón “+ Componente”.</div>`;
+    host.innerHTML = `<div class="muted">Aún no hay evaluaciones. Usa “Agregar evaluación”.</div>`;
     return;
   }
 
   const isMayor = (header.scale === 'MAYOR');
   const min  = isMayor ? 1 : 0;
   const max  = isMayor ? 7 : 100;
-  const step = isMayor ? 0.01 : 1;   // ⬅️ AQUÍ: USM sube de a 0.1 con flechitas
+  const step = isMayor ? 0.1 : 1;
 
   components.forEach(c=>{
-    const row = document.createElement('div');
-    row.className = 'gr-row';
-    row.innerHTML = `
-      <div class="head">
-        <div><label>Clave (usa en fórmula)</label><div class="gr-id">${c.key}</div></div>
-        <div><label>Nombre</label><br/><input data-f="name" value="${esc(c.name)}"/></div>
-        <div><label>Nota</label><br/>
-          <input data-f="score" type="number" step="${step}" min="${min}" max="${max}"
-                 value="${c.score??''}" style="width:100px"/>
-        </div>
-        <div class="gr-actions">
-          <button data-act="save" class="primary">Guardar</button>
-          <button data-act="del"  class="danger">Eliminar</button>
-        </div>
+    const card = document.createElement('div');
+    card.className = 'grade-item';
+    card.innerHTML = `
+      <div style="flex:1">
+        <div style="font-weight:700">${esc(c.name || c.key)}</div>
+        <div class="muted">Código: <code>${esc(c.key)}</code></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <input data-f="score" type="number" step="${step}" min="${min}" max="${max}" value="${c.score??''}" style="width:110px"/>
+        <button data-act="save" class="btn btn-secondary">Guardar</button>
+        <button data-act="del"  class="btn btn-secondary">Eliminar</button>
       </div>
     `;
-    host.appendChild(row);
+    host.appendChild(card);
 
-    const saveBtn = row.querySelector('[data-act="save"]');
-    const resetBtnText = ()=>{ saveBtn.textContent = 'Guardar'; };
+    card.addEventListener('click', async (e)=>{
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
 
-    row.querySelectorAll('input').forEach(inp=>{
-      inp.addEventListener('input', resetBtnText);
-      if (inp.dataset.f === 'score'){
-        inp.addEventListener('change', ()=>{
-          const v = parseFloat(inp.value);
-          if (!isNaN(v)){
-            inp.value = clamp(v, min, max);  // mantenemos límites
-          }
-        });
-      }
-    });
-
-    row.addEventListener('click', async (e)=>{
-      const btn = e.target;
-      if (!(btn instanceof HTMLElement)) return;
-
-      if (btn.dataset.act === 'save'){
-        const get = (sel)=> row.querySelector(`[data-f="${sel}"]`);
-        const name = (get('name').value || '').trim() || c.key;
-        const scoreRaw = parseMaybe(get('score').value);
-        const score = (scoreRaw==null) ? null : clamp(scoreRaw, min, max);
-        await updateDoc(doc(componentsColRef(), c.id), { name, score });
-        btn.textContent = 'Guardado ✓';
+      if (t.dataset.act === 'save'){
+        const inp = card.querySelector('[data-f="score"]');
+        let v = parseFloat(inp.value);
+        const score = isNaN(v) ? null : clamp(v, min, max);
+        await updateDoc(doc(componentsColRef(), c.id), { score });
+        t.textContent = 'Guardado ✓';
         computeAndRender();
+        setTimeout(()=> t.textContent = 'Guardar', 1200);
       }
 
-      if (btn.dataset.act === 'del'){
-        if (!confirm(`Eliminar ${c.name || c.key}?`)) return;
+      if (t.dataset.act === 'del'){
+        if (!confirm(`Eliminar “${c.name || c.key}”?`)) return;
         await deleteDoc(doc(componentsColRef(), c.id));
       }
     });
   });
 }
+
 
 
 /* =================== Cálculo =================== */
@@ -460,16 +537,11 @@ $('gr-rulesStatus') && ( $('gr-rulesStatus').dataset.formulaError = lastErr );
       );
     }
     if (!rulesEval.allOk){
-      const msgs = rulesEval.unmet.map(u => {
-        if (u.kind === 'cmp' && isFinite(u.left) && isFinite(u.right) && (u.op === '>=' || u.op === '>')) {
-          const need = Math.max(0, (u.op === '>=' ? (u.right - u.left) : (u.right - u.left + 0.01)));
-          const faltan = (header.scale==='MAYOR') ? need.toFixed(2) : need.toFixed(1);
-          return `Cumplir: ${u.text} (faltan ≈ ${faltan}).`;
-        }
-        return `Cumplir: ${u.text}.`;
-      });
-      parts.push(...msgs);
-    }
+  // Solo listar qué reglas faltan, sin cuantificar “faltan ≈ …”
+  const msgs = rulesEval.unmet.map(u => `Cumplir: ${u.text}.`);
+  parts.push(...msgs);
+}
+
     needed = parts.join(' ');
   }
 
@@ -550,7 +622,7 @@ function parseRules(text){
   return lines;
 }
 
-function evaluateRules(lines, vars){
+function evaluateRules(lines, vars, fns){
   const res = { allOk: true, items: [], unmet: [] };
   for (const line of lines){
     const parsed = parseComparison(line);
@@ -563,10 +635,12 @@ function evaluateRules(lines, vars){
     const { left, op, right } = parsed;
     let lv = null, rv = null, ok = false;
     try{
-      lv = safeEvalExpr(left, vars,  { avg, min: Math.min, max: Math.max,
-                                 final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById });
-rv = safeEvalExpr(right, vars, { avg, min: Math.min, max: Math.max,
-                                 final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById });
+      
+      const baseFns = { avg, min: Math.min, max: Math.max,
+        final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById };
+      const useFns = { ...baseFns, ...(fns || {}) };
+      lv = safeEvalExpr(left,  vars, useFns);
+      rv = safeEvalExpr(right, vars, useFns);
 
       ok = compare(lv, op, rv);
     }catch{
@@ -626,25 +700,40 @@ function renderRulesStatus(r){
 
 /* Mostrar Resultado */
 function renderResult(res){
-  const f = $('gr-currentFinal');
+  const f = $('gr-currentFinal') || $('gr-currentAvg');
   const s = $('gr-status');
-  const n = $('gr-needed');
-  
+  const n = $('gr-needed') || $('gr-neededToPass');
+
   if (!f || !s || !n) return;
+
+  // ⬇️ Sin placeholders con “—”
   if (!res){
-    f.textContent = '—'; s.textContent = '—'; n.textContent = '—';
-    // al limpiar, borra dataset base (para que se recalcule el panel de pareja)
+    f.textContent = '';
+    s.textContent = '';
+    n.textContent = '';
     delete f.dataset.base; delete s.dataset.base;
     return;
   }
-  const isMayor = (header.scale === 'MAYOR');
-  const shown = (res.final==null) ? '—' : truncate(res.final, header.scale).toString();
+
+  const scale = header?.scale || 'USM';
+  const shown = (res.final==null) ? '' : truncate(res.final, scale).toString(); // ← vacío si no hay dato
   f.textContent = shown;
-  s.textContent = res.status ?? '—';
-  n.textContent = res.needed ?? '—';
+  s.textContent = res.status ?? '';
+  n.textContent = res.needed ?? '';
 }
 
+
+
 /* =================== Helpers =================== */
+
+function debounce(fn, ms){
+  let t = null;
+  return (...args)=>{
+    if (t) clearTimeout(t);
+    t = setTimeout(()=> fn(...args), ms);
+  };
+}
+
 
 function readyPath(){
   return !!(state.currentUser && state.activeSemesterId && currentCourseId);
@@ -690,25 +779,18 @@ function prepareForEval(expr){
   return expr.replace(/(\d+(?:\.\d+)?)\s*%/g, (_, n) => `(${n}/100)`);
 }
 
-// Evaluación segura con variables (claves de componentes) y funciones whitelisted
+// ✅ versión buena y probada
 function safeEvalExpr(expr, vars, fns = {}){
-  // 1) Normaliza texto y aplica auto-comillas a final(...)/finalCode(...)/finalId(...)
   const normalized = normalizeExpr(expr);
   const withQuoted = autoQuoteFunctionArgs(normalized);
-
-  // 2) Enmascara literales de cadena por 0 para la validación (así no fallamos por comillas)
   const masked = withQuoted.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '0');
-
-  // 3) Valida que *por fuera* de cadenas solo haya tokens permitidos
   if (!/^[\w\s\.\+\-\*\/\(\),%]+$/.test(masked)) {
     throw new Error('La fórmula contiene caracteres no permitidos.');
   }
-
-  // 4) Para evaluar, convierte % → /100 sobre la versión con auto-quote
   const e = prepareForEval(withQuoted);
 
   const keys = Object.keys(vars);
-  const vals = keys.map(k => vars[k] ?? 0); // faltantes como 0
+  const vals = keys.map(k => vars[k] ?? 0);
 
   const fnNames = Object.keys(fns);
   const fnVals  = Object.values(fns);
@@ -721,263 +803,13 @@ function safeEvalExpr(expr, vars, fns = {}){
 
 
 
-/* ========== PESTAÑA: "Notas de tu pareja" (solo lectura) ========== */
 
-let grpUnsubCourses = null;
-let grpUnsubMeta = null;
-let grpUnsubComps = null;
-let grpPartnerCourses = []; // cache de cursos del semestre elegido
 
-function bindPartnerPanelUi(){
-  const openBtn = $('gr-openPartnerBtn');
-  const closeBtn = $('gr-closePartnerBtn');
-  const panel = $('grPartnerPanel');
-  const semSel = $('grp-semSel');
-  const courseSel = $('grp-courseSel');
-
-  openBtn?.addEventListener('click', async ()=>{
-    if (!state.pairOtherUid){
-      alert('Debes emparejarte primero.');
-      return;
-    }
-    panel?.classList.remove('hidden');
-    toggleOwnNotes(true);       // ⬅️ oculta todo lo propio
-    await grpPopulateSemesters();
-  });
-
-  closeBtn?.addEventListener('click', ()=>{
-    panel?.classList.add('hidden');
-    grpStopAll();
-    toggleOwnNotes(false);      // ⬅️ vuelve a mostrar lo propio
-    // limpia sufijos “(pareja: …)” del resultado principal
-    const f = $('gr-currentFinal'), s = $('gr-status');
-    if (f && s){ delete f.dataset.base; delete s.dataset.base; }
-  });
-
-  semSel?.addEventListener('change', async (e)=>{
-    const semId = e.target.value || null;
-    await grpPopulateCourses(semId);
-  });
-
-  courseSel?.addEventListener('change', async (e)=>{
-    const semId = semSel?.value || null;
-    const cid = e.target.value || null;
-    await grpSubscribeCourse(semId, cid);
-  });
-}
-
-/* Oculta/Muestra TODO el contenido propio de #page-notas,
-   excepto el header (el contenedor que tiene el botón) y el panel de pareja */
-function toggleOwnNotes(hide){
-  const page = $('page-notas'); if (!page) return;
-  const headerRow = $('#gr-openPartnerBtn')?.closest('div'); // fila con el título y botón
-  Array.from(page.children).forEach(el=>{
-    if (el === headerRow) return;           // deja el header
-    if (el.id === 'grPartnerPanel') return; // deja el panel (lo mostramos/ocultamos aparte)
-    el.classList.toggle('hidden', !!hide);
-  });
-}
-
-function grpStopAll(){
-  grpUnsubCourses?.(); grpUnsubCourses = null;
-  grpUnsubMeta?.();    grpUnsubMeta = null;
-  grpUnsubComps?.();   grpUnsubComps = null;
-  grpPartnerCourses = [];
-  const courseSel = $('grp-courseSel');
-  if (courseSel) courseSel.innerHTML = '';
-  // limpia panel
-  $('grp-meta') && ($('grp-meta').textContent = 'Selecciona semestre y ramo para ver su cálculo.');
-  $('grp-components') && ($('grp-components').innerHTML = 'Sin componentes…');
-  $('grp-finalExpr') && ($('grp-finalExpr').textContent = '—');
-  $('grp-rules') && ($('grp-rules').innerHTML = 'Sin reglas definidas…');
-}
-
-/* ---- Pobladores ---- */
-
-// Semestres de la pareja (más reciente primero)
-async function grpPopulateSemesters(){
-  const sel = $('grp-semSel'); if (!sel) return;
-  sel.innerHTML = '<option value="">—</option>';
-  const other = state.pairOtherUid; if (!other) return;
-
-  const ref = collection(db,'users', other, 'semesters');
-  const snap = await getDocs(query(ref, orderBy('createdAt','desc')));
-  snap.forEach(d=>{
-    const opt = document.createElement('option');
-    opt.value = d.id;
-    opt.textContent = d.data()?.label || '—';
-    sel.appendChild(opt);
-  });
-
-  if (snap.size > 0){
-    sel.value = snap.docs[0].id;
-    await grpPopulateCourses(sel.value);
-  }
-}
-
-// Ramos de la pareja para el semestre elegido
-async function grpPopulateCourses(semId){
-  const other = state.pairOtherUid;
-  const courseSel = $('grp-courseSel');
-  const metaBox = $('grp-meta');
-  if (!other || !courseSel){ return; }
-
-  grpUnsubCourses?.(); grpUnsubCourses = null;
-  courseSel.innerHTML = '';
-
-  if (!semId){
-    metaBox.textContent = 'Selecciona semestre y ramo para ver su cálculo.';
-    return;
-  }
-
-  const ref = collection(db,'users', other, 'semesters', semId, 'courses');
-  grpUnsubCourses = onSnapshot(query(ref, orderBy('name')), (snap)=>{
-    grpPartnerCourses = snap.docs.map(d=>({ id:d.id, ...d.data() }));
-    courseSel.innerHTML = '';
-    grpPartnerCourses.forEach(c=>{
-      const opt = document.createElement('option');
-      opt.value = c.id; opt.textContent = c.name || 'Ramo';
-      courseSel.appendChild(opt);
-    });
-
-    if (grpPartnerCourses.length){
-      courseSel.value = grpPartnerCourses[0].id;
-      grpSubscribeCourse(semId, courseSel.value);
-    }else{
-      metaBox.textContent = 'Este semestre no tiene ramos.';
-      renderGrpComponents([]); renderGrpMeta(null, null, null); renderGrpRules(null);
-    }
-  });
-}
-
-/* ---- Suscripciones por ramo ---- */
-
-async function grpSubscribeCourse(semId, courseId){
-  const other = state.pairOtherUid;
-  const metaBox = $('grp-meta');
-  if (!other || !semId || !courseId){
-    metaBox.textContent = 'Selecciona semestre y ramo para ver su cálculo.';
-    renderGrpComponents([]); renderGrpMeta(null, null, null); renderGrpRules(null);
-    // limpia sufijos del resultado propio
-    const f = $('gr-currentFinal'), s = $('gr-status');
-    if (f && s){ delete f.dataset.base; delete s.dataset.base; renderSharedSuffix(null, null); }
-    return;
-  }
-
-  // corta anteriores
-  grpUnsubMeta?.();  grpUnsubMeta = null;
-  grpUnsubComps?.(); grpUnsubComps = null;
-
-  // meta (escala, umbral implícito por escala, fórmula, reglas…)
-  const metaRef = doc(db,'users', other, 'semesters', semId, 'courses', courseId, 'grading', 'meta');
-  grpUnsubMeta = onSnapshot(metaRef, (snap)=>{
-    const d = snap.data() || {};
-    renderGrpMeta(d.scale || 'USM', null, d.finalExpr || '');
-    renderGrpRules(d.rulesText || '');
-    // recalcula sufijos en resultado principal
-    renderSharedSuffix(d, null);
-  });
-
-  // componentes
-  const compRef = collection(db,'users', other, 'semesters', semId, 'courses', courseId, 'grading', 'meta', 'components');
-  grpUnsubComps = onSnapshot(query(compRef, orderBy('name')), (snap)=>{
-    const arr = snap.docs.map(x=>({ id:x.id, ...x.data() }));
-    renderGrpComponents(arr);
-    // recalcula sufijos con componentes
-    renderSharedSuffix(null, arr);
-  });
-}
 
 /* ---- Render del panel ---- */
 
-function renderGrpMeta(scale, _thr, expr){
-  const box = $('grp-meta');
-  const scaleLabel = (scale==='MAYOR') ? 'UMayor (1–7)' : 'USM (0–100)';
-  const thr = (scale==='MAYOR') ? 3.95 : 54.5; // informativo
-  box.innerHTML = `<b>Escala:</b> ${scaleLabel} · <b>Umbral de aprobación:</b> ${thr}`;
-  const ex = $('grp-finalExpr');
-  if (ex) ex.textContent = expr || '—';
-}
-
-function renderGrpRules(text){
-  const box = $('grp-rules');
-  const t = (text || '').trim();
-  if (!t){
-    box.innerHTML = 'Sin reglas definidas…';
-    return;
-  }
-  const lines = t.split(/\r?\n/).filter(s=>s.trim().length);
-  box.innerHTML = `<ul style="margin:6px 0 0 16px">${lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`;
-}
-
-function renderGrpComponents(arr){
-  const box = $('grp-components');
-  if (!arr || !arr.length){
-    box.innerHTML = 'Sin componentes…';
-    return;
-  }
-  box.innerHTML = `
-    <div class="table-like">
-      <div class="row" style="font-weight:600">
-        <div style="flex:2">Nombre</div>
-        <div style="flex:1">Clave</div>
-        <div style="flex:1">Nota</div>
-      </div>
-      ${arr.map(c=>`
-        <div class="row">
-          <div style="flex:2">${esc(c.name || '')}</div>
-          <div style="flex:1"><code>${esc(c.key || '')}</code></div>
-          <div style="flex:1">${(c.score??'') === '' ? '—' : esc(String(c.score))}</div>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
 
 /* ---- Sufijos “(pareja: …)” en el resultado propio ---- */
-
-function renderSharedSuffix(metaOrNull, compsOrNull){
-  // cache en cierres
-  renderSharedSuffix._meta = metaOrNull ?? renderSharedSuffix._meta;
-  renderSharedSuffix._comps = compsOrNull ?? renderSharedSuffix._comps;
-
-  const meta = renderSharedSuffix._meta || { scale:'USM', finalExpr:'', rulesText:'' };
-  const comps = renderSharedSuffix._comps || [];
-
-  // calcula final pareja
-  const values = {};
-  const min = meta.scale==='MAYOR' ? 1 : 0;
-  const max = meta.scale==='MAYOR' ? 7 : 100;
-  comps.forEach(c=>{ if (typeof c.score==='number') values[c.key]=clamp(c.score, min, max); });
-
-  let final = null;
-  if (meta.finalExpr?.trim()){
-  try{
-    final = safeEvalExpr(meta.finalExpr, values);
-    if (typeof final==='number' && isFinite(final)){
-      final = truncate(final, meta.scale);  // ⬅️ truncar aquí también
-    } else final=null;
-  }catch{ final=null; }
-}
-  const thr = (meta.scale==='MAYOR') ? 3.95 : 54.5;
-  const rules = parseRules(meta.rulesText||'');
-  const rulesEval = evaluateRules(rules, values);
-  const status = (final!=null && final>=thr && rulesEval.allOk) ? 'Aprueba' : (final==null? '—' : 'Reprueba');
-
-  const f = $('gr-currentFinal'), s = $('gr-status');
-  if (!f || !s) return;
-
-  // guarda base si no existe
-  if (!f.dataset.base) f.dataset.base = f.textContent;
-  if (!s.dataset.base) s.dataset.base = s.textContent;
-  // restaura base limpia y agrega sufijos
-  f.textContent = f.dataset.base;
-  s.textContent = s.dataset.base;
-
-  const fTxt = (final==null) ? '—' : truncate(final, meta.scale).toString();
-  f.textContent += `  (pareja: ${fTxt})`;
-  s.textContent += `  (pareja: ${status})`;
-}
 
 function truncate(val, scale){
   if (val == null || isNaN(val)) return null;
@@ -1037,4 +869,205 @@ function lookupFinalById(id){
   if (!id || id===currentCourseId) return NaN;
   const hit = crossFinals.byId[id];
   return (hit && typeof hit.final === 'number') ? hit.final : NaN;
+}
+
+// ====== MODO "NOTAS DE MI PAREJA" (simple) ======
+
+// 3.1 Toggle (usa el botón #gr-togglePartner y los contenedores del HTML nuevo)
+(function setupPartnerToggle(){
+  const btn = $('gr-togglePartner');
+  if (!btn) return;
+
+  // tarjetas propias (las del UI de "Mis Notas")
+  const ownBlocks = [
+    $('gr-courseSel')?.closest('.card'),
+    $('gr-evalsList')?.closest('.card'),
+    $('gr-finalExpr')?.closest('.card'),
+    $('gr-currentFinal')?.closest('.card') || $('gr-currentAvg')?.closest('.card'),
+    $('gr-rulesCard'),
+  ].filter(Boolean);
+
+  const partnerCard = $('gr-partnerView');
+
+  function setMode(on){
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.textContent = on ? 'Volver a mis notas' : 'Notas de mi pareja';
+    ownBlocks.forEach(el => setHidden(el, on));
+    setHidden(partnerCard, !on);
+    if (on) grpPopulateSemesters(); // carga combo al encender
+  }
+
+  btn.addEventListener('click', ()=>{
+    const now = btn.getAttribute('aria-pressed') === 'true';
+    setMode(!now);
+  });
+
+  // si la pareja queda lista, rellenamos
+  document.addEventListener('pair:ready', grpPopulateSemesters);
+})();
+
+// 3.2 Poblar semestres de la pareja (orden AAAA-T desc, sin duplicados)
+let _grpPopulateToken = 0;
+async function grpPopulateSemesters(){
+  const sel = $('gr-sh-semSel'); if (!sel) return;
+
+  // limpiar
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = ''; opt0.textContent = '— seleccionar —';
+  sel.appendChild(opt0);
+
+  if (!state.pairOtherUid) return;
+
+  const myToken = ++_grpPopulateToken;
+
+  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+                   .replace(/\s+/g,' ').trim();
+  const canon = s => {
+    const t = norm(s);
+    const m = t.replace(/[^\d\-\/ ]+/g,'').match(/(\d{4})\D*([12])$/);
+    return m ? `${m[1]}-${m[2]}` : t.toLowerCase();
+  };
+  const parseYT = label => {
+    const m = /^(\d{4})-(1|2)$/.exec(canon(label));
+    return m ? { y:+m[1], t:+m[2] } : { y:-Infinity, t:-Infinity };
+  };
+
+  const ref = collection(db,'users',state.pairOtherUid,'semesters');
+  const snap = await getDocs(query(ref)); // ordenaremos nosotros
+  if (myToken !== _grpPopulateToken) return;
+
+  const byKey = new Map();
+  snap.forEach(d=>{
+    const shown = norm(d.data()?.label || d.id);
+    const key = canon(shown);
+    if (!byKey.has(key)){
+      const { y, t } = parseYT(shown);
+      byKey.set(key, { id:d.id, labelToShow:shown, y, t });
+    }
+  });
+
+  const options = Array.from(byKey.values()).sort((a,b)=> (b.y-a.y) || (b.t-a.t));
+
+  const frag = document.createDocumentFragment();
+  for (const { id, labelToShow } of options){
+    const o = document.createElement('option');
+    o.value = id; o.textContent = labelToShow;
+    frag.appendChild(o);
+  }
+  sel.appendChild(frag);
+
+  const prev = state.shared?.notas?.semId || '';
+  if (prev && Array.from(sel.options).some(o=>o.value===prev)){
+    sel.value = prev;
+  } else {
+    const first = Array.from(sel.options).find(o=>o.value);
+    sel.value = first ? first.value : '';
+  }
+  state.shared.notas.semId = sel.value || null;
+
+  sel.onchange = ()=>{
+    state.shared.notas.semId = sel.value || null;
+    subscribePartnerGrades(state.shared.notas.semId);
+  };
+  subscribePartnerGrades(state.shared.notas.semId);
+}
+
+// 3.3 Suscribir y renderizar notas por semestre (solo final + estado)
+let _grpUnsubCourses = null;
+function cleanupPartnerSubs(){ if (_grpUnsubCourses){ _grpUnsubCourses(); _grpUnsubCourses=null; } }
+
+async function subscribePartnerGrades(semId){
+  cleanupPartnerSubs();
+  const list = $('gr-sh-list'); if (list) list.innerHTML = '';
+  if (!state.pairOtherUid || !semId) return;
+
+  // universidad para escala/umbral por defecto
+  const semSnap = await getDoc(doc(db,'users',state.pairOtherUid,'semesters',semId));
+  const uniReadable = semSnap.exists() ? (semSnap.data().universityAtThatTime || '') : '';
+  const SCALE = /mayor/i.test(uniReadable) ? 'MAYOR' : 'USM';
+  const THR   = SCALE==='MAYOR' ? 3.95 : 54.5;
+
+  // cursos del semestre (pareja)
+  const coursesRef = collection(db,'users',state.pairOtherUid,'semesters',semId,'courses');
+  _grpUnsubCourses = onSnapshot(query(coursesRef, orderBy('name')), async (snap)=>{
+    const rows = [];
+
+    for (const c of snap.docs){
+      const cData = c.data() || {};
+      const courseId = c.id;
+
+      // meta
+      const metaRef = doc(db,'users',state.pairOtherUid,'semesters',semId,'courses',courseId,'grading','meta');
+      const metaSnap = await getDoc(metaRef);
+      const meta = metaSnap.exists() ? metaSnap.data() : { scale:SCALE, finalExpr:'', rulesText:'' };
+
+      // componentes
+      const compsCol = collection(
+  db, 'users', state.pairOtherUid, 'semesters', semId,
+  'courses', courseId, 'grading', 'meta', 'components'
+);
+const compsSnap = await getDocs(compsCol);
+const comps = compsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+
+      // calcular final
+      const vals = {};
+      const isMayor = (meta.scale === 'MAYOR');
+      const min = isMayor ? 1 : 0;
+      const max = isMayor ? 7 : 100;
+      comps.forEach(k=>{
+        const v = typeof k.score==='number' ? Math.max(min, Math.min(max, k.score)) : null;
+        if (v!=null && k.key) vals[k.key] = v;
+      });
+
+      let final = null;
+      try{
+        if ((meta.finalExpr||'').trim()){
+          final = safeEvalExpr(meta.finalExpr, vals, { avg, min:Math.min, max:Math.max });
+          if (typeof final==='number' && isFinite(final)) final = truncate(final, meta.scale);
+          else final = null;
+        }
+      }catch{ final = null; }
+
+      const thr = (meta.scale==='MAYOR') ? 3.95 : 54.5;
+      const rules = parseRules(meta.rulesText || '');
+      const rulesEval = evaluateRules(rules, vals);
+      const status = (final!=null && final>=thr && rulesEval.allOk) ? 'Aprobado' : (final==null ? '—' : 'Reprobado');
+
+      rows.push({ name: cData.name || 'Ramo', final, scale: meta.scale || SCALE, status });
+    }
+
+    renderPartnerRows(rows);
+  });
+}
+
+// 3.4 Render minimalista (sin depender de clases CSS especiales)
+function renderPartnerRows(rows){
+  const host = $('gr-sh-list'); if (!host) return;
+  host.innerHTML = '';
+  if (!rows.length){
+    host.innerHTML = `<div class="muted">No hay ramos en ese semestre.</div>`;
+    return;
+  }
+
+  rows.forEach(r=>{
+    const val = (r.final==null)
+      ? '—'
+      : (r.scale==='MAYOR'
+          ? (Math.trunc(r.final*100)/100).toFixed(2)
+          : (Math.trunc(r.final*10)/10).toFixed(1));
+    const color = r.status==='Aprobado' ? '#22c55e' : (r.status==='Reprobado' ? '#ef4444' : 'var(--muted)');
+    const row = document.createElement('div');
+    row.className = 'course-item';
+    row.innerHTML = `
+      <div>
+        <div><b>${esc(r.name)}</b></div>
+        <div class="course-meta">Final: ${val}</div>
+      </div>
+      <div class="inline">
+        <span style="font-weight:700;color:${color}">${r.status}</span>
+      </div>
+    `;
+    host.appendChild(row);
+  });
 }

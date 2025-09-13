@@ -1,7 +1,13 @@
 import { auth, db } from './firebase.js';
 import {
-  GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  // getRedirectResult,  // ya no lo necesitamos aquí
+  onAuthStateChanged,
+  signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+
 import { doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 import { $, state, updateDebug } from './state.js';
@@ -24,7 +30,7 @@ export function initAuth() {
     if (userBadge)  userBadge.style.display = 'inline-flex';
     if (signInBtn)  signInBtn.style.display = 'none';
     if (userNameEl) userNameEl.textContent  = nameOrEmail || '—';
-    // Habilitar acciones de pair en la UI básica (pair.js puede re‑ajustar luego)
+    // Habilitar acciones de pair en la UI básica (pair.js puede re-ajustar luego)
     const createPairBtn = $('createPairBtn');
     const copyInviteBtn = $('copyInviteBtn');
     if (createPairBtn) createPairBtn.disabled = false;
@@ -56,16 +62,37 @@ export function initAuth() {
   if (signInBtn) {
     signInBtn.addEventListener('click', async () => {
       setAuthLoading(true);
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+
       try {
-        await signInWithPopup(auth, new GoogleAuthProvider());
+        await signInWithPopup(auth, provider);
       } catch (e) {
-        console.error(e);
-        alert(`Fallo al iniciar sesión: ${e.code || e.message || e}`);
+        // Fallback si el popup es bloqueado, cancelado o cerrado
+        const code = e?.code || '';
+        const popupIssues = [
+          'auth/popup-blocked',
+          'auth/cancelled-popup-request',
+          'auth/popup-closed-by-user'
+        ];
+        if (popupIssues.includes(code)) {
+          try {
+            await signInWithRedirect(auth, provider);
+            // No hacemos getRedirectResult aquí. onAuthStateChanged se encargará al volver.
+          } catch (err) {
+            console.error(err);
+            alert(`Fallo al iniciar sesión (redirect): ${err.code || err.message || err}`);
+          }
+        } else {
+          console.error(e);
+          alert(`Fallo al iniciar sesión: ${code || e.message || e}`);
+        }
       } finally {
         setAuthLoading(false);
       }
     });
   }
+
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
       setAuthLoading(true);
