@@ -10,9 +10,20 @@ import { onActiveSemesterChanged as calOnSem } from './calendar.js';
 import { setCoursesSubscription, resetCourseForm, updateFormForUniversity } from './courses.js';
 
 let unsubscribeSemesters = null;
+let __semUIBound = false; 
 
 export function initSemesters() {
+  if (__semUIBound) return;   // 👈 evita listeners duplicados
+  __semUIBound = true;
   bindUI();
+}
+
+export function stopSemestersSub() {
+  if (unsubscribeSemesters) { unsubscribeSemesters(); unsubscribeSemesters = null; }
+  // limpia la UI (por si quedó lista antigua)
+  const list = $('semestersList'); if (list) list.innerHTML = '';
+  // y resetea el activo
+  clearActiveSemester();
 }
 
 function bindUI() {
@@ -74,7 +85,6 @@ if (!existing.empty) {
 }
 
 export function refreshSemestersSub() {
-  // Corta suscripción anterior
   if (unsubscribeSemesters) { unsubscribeSemesters(); unsubscribeSemesters = null; }
   if (!state.currentUser) return;
 
@@ -84,31 +94,43 @@ export function refreshSemestersSub() {
     if (!list) return;
     list.innerHTML = '';
 
+    // si no hay semestres, limpia activo y sal
+    if (snap.empty) {
+      clearActiveSemester();
+      return;
+    }
+
     snap.forEach((docSnap) => {
       const d = docSnap.data();
       const item = document.createElement('div');
       item.className = 'course-item';
       item.innerHTML = `
-  <div>
-    <div><b>${d.label}</b> <span class="course-meta">· ${d.universityAtThatTime}</span></div>
-  </div>
-  <div class="inline">
-    ${state.activeSemesterId === docSnap.id
-      ? '<span class="course-meta">Activo</span>'
-      : `<button class="ghost sem-activate" data-id="${docSnap.id}">Activar</button>`}
-    <button class="danger sem-delete" data-id="${docSnap.id}">Eliminar</button>
-  </div>
-`;
-
+        <div>
+          <div><b>${d.label}</b> <span class="course-meta">· ${d.universityAtThatTime}</span></div>
+        </div>
+        <div class="inline">
+          ${state.activeSemesterId === docSnap.id
+            ? '<span class="course-meta">Activo</span>'
+            : `<button class="ghost sem-activate" data-id="${docSnap.id}">Activar</button>`}
+          <button class="danger sem-delete" data-id="${docSnap.id}">Eliminar</button>
+        </div>
+      `;
       list.appendChild(item);
     });
 
-    // Si no hay activo y hay semestres, activa el primero por UX
+    // si el activo ya no existe en este usuario, límpialo
+    if (state.activeSemesterId &&
+        !snap.docs.some(d => d.id === state.activeSemesterId)) {
+      clearActiveSemester();
+    }
+
+    // si no hay activo aún, activa el más reciente por UX
     if (!state.activeSemesterId && !snap.empty) {
       setActiveSemester(snap.docs[0].id);
     }
   });
 }
+
 
 export async function setActiveSemester(semId) {
   if (!state.currentUser || !semId) return;

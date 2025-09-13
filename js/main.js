@@ -13,9 +13,8 @@ import { initSchedule, onActiveSemesterChanged as schedOnSem } from './schedule.
 import { ensureCareerBindingOnLoad } from './profile.js';
 
 window.addEventListener('DOMContentLoaded', () => {
-  initRouter();
   initAuth();
-
+  initRouter();
   initPair();
   initSemesters();
   initCourses();

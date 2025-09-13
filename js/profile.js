@@ -3,6 +3,15 @@ import { db } from './firebase.js';
 import { doc, onSnapshot, updateDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { $, state, updateDebug } from './state.js';
 
+let unsubProfile = null; // 👈 NUEVO
+
+export function stopProfileListener(){
+  if (unsubProfile) { unsubProfile(); unsubProfile = null; }
+  state.unsubscribeProfile = null;
+}
+
+
+
 // 🔁 NUEVOS helpers de fecha
 function parseStoredBirthdayToPickerValue(stored){
   if (!stored) return '';
@@ -69,17 +78,49 @@ const CAREERS_BY_UNI = {
 
 /* ================= Listeners ================= */
 export function listenProfile(){
-  const ref = doc(db,'users', state.currentUser.uid);
-  onSnapshot(ref, (snap)=>{
+  // corta sub anterior (por cambio de cuenta)
+  if (unsubProfile) { unsubProfile(); unsubProfile = null; }
+
+  const uid = state.currentUser?.uid;       // 👈 protege si no hay user
+  if (!uid) return;
+
+  const ref = doc(db,'users', uid);
+  unsubProfile = onSnapshot(ref, (snap)=>{
     state.profileData = snap.data() || null;
-    console.log('[snapshot] server birthday =', state.profileData?.birthday);
 
     fillProfileForm(state.profileData);
     reflectProfileInSemestersUI();
     updateDebug();
     document.dispatchEvent(new Event('profile:changed'));
   });
+
+  // deja a mano el unsubscribe para auth.js
+  state.unsubscribeProfile = () => { unsubProfile?.(); unsubProfile = null; };
 }
+
+export function clearProfileUI(){
+  const set = (id, val='') => { const el = $(id); if (el) el.value = val; };
+
+  set('pfName');
+  set('pfGoogleEmail');    // 👈 borra el correo visible
+  set('pfBirthday');
+  set('pfFavoriteColor', '#22c55e');
+  const prev = $('pfColorPreview'); if (prev) prev.style.background = '#22c55e';
+  const code = $('pfColorCode');    if (code) code.textContent = '#22C55E';
+
+  const uni = $('pfUniversity') || $('uniSel'); if (uni) uni.value = '';
+  const car = $('pfCareer') || $('careerSel');  if (car) { car.value = ''; car.disabled = true; }
+
+  set('pfEmailUni');
+  set('pfPhone');
+
+  // resetea avatar
+  renderAvatarInCircle(null);
+
+  // quita “dirty” del date para que vuelva a obedecer al servidor
+  const bInp = $('pfBirthday'); if (bInp) delete bInp.dataset?.dirty;
+}
+
 
 /* ================= UI ================= */
 export function fillProfileForm(d){

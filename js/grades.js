@@ -13,6 +13,37 @@ let components = []; // [{id,key,name,score}]
 let header = { scale: 'USM', finalExpr: '', rulesText: '' };
 // --- Referencias cruzadas de notas finales (otros ramos del MISMO semestre) ---
 let crossFinals = { byName:{}, byCode:{}, byId:{} };  // caches
+let unsubGrades = null;
+
+export function registerGradesUnsub(unsub){
+  unsubGrades = unsub;
+  state.unsubscribeGrades = () => { try{ unsubGrades?.(); }finally{ unsubGrades=null; state.unsubscribeGrades=null; } };
+}
+
+// Corta todo lo que esté escuchando Notas
+export function stopGradesSub(){
+  try { unsubGrades?.(); } finally { unsubGrades = null; }
+  state.unsubscribeGrades = null;
+}
+
+// Limpia la UI de Notas
+export function clearGradesUI(){
+  const sel = $('gr-courseSel');
+  if (sel) sel.innerHTML = '<option value="" disabled selected>Selecciona un ramo…</option>';
+
+  const list = $('gr-evalsList');      if (list) list.innerHTML = '';
+  const expr = $('gr-finalExpr');      if (expr) expr.value = '';
+  const err  = $('gr-rulesError');     if (err)  err.textContent = '';
+
+  const avg  = $('gr-currentAvg');     if (avg)  avg.textContent = '—';
+  const need = $('gr-neededToPass');   if (need) need.textContent = '—';
+  const st   = $('gr-status');         if (st)   st.textContent   = '—';
+
+  // vista de pareja (si la tienes)
+  const pv   = $('gr-partnerView');    if (pv)   pv.classList.add('hidden');
+  const pSel = $('gr-sh-semSel');      if (pSel) pSel.innerHTML = '';
+  const pLst = $('gr-sh-list');        if (pLst) pLst.innerHTML = '';
+}
 
 
 export function initGrades(){

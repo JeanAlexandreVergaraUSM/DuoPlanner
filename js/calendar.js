@@ -10,6 +10,7 @@ let currentMonth = new Date();        // foco del calendario
 let unsubscribeCal = null;
 let events = []; // propios [{id,title,courseId,date,start,end,allDay,color,createdAt}]
 let booted = false;
+let unsubCalendar = null;
 
 /* Compartido */
 let unsubSharedEvents = null;
@@ -18,6 +19,32 @@ let unsubPartnerProfile = null;
 let sharedEvents = [];
 let sharedCourses = [];
 let partnerColor = '#ff69b4';
+
+export function registerCalendarUnsub(unsub){
+  unsubCalendar = unsub;
+}
+
+export function stopCalendarSub(){
+  try { unsubCalendar?.(); } finally { unsubCalendar = null; }
+}
+
+// Limpia/oculta la UI del calendario
+export function clearCalendarUI(){
+  // si tu calendario se renderiza en un contenedor, límpialo
+  const page = $('page-calendario');
+  if (page) {
+    // ocúltalo al salir (puedes revertirlo al loguear)
+    page.classList.add('hidden');
+    // y si tienes un host específico, límpialo:
+    const grid = page.querySelector('[data-cal-grid]') || page.querySelector('.cal-grid');
+    if (grid) grid.innerHTML = '';
+  }
+}
+
+// (opcional) al volver a iniciar sesión, muestra de nuevo la página
+export function showCalendarUI(){
+  $('page-calendario')?.classList.remove('hidden');
+}
 
 /* ================= Helpers color/ramo ================= */
 function isValidHex(s){ return typeof s==='string' && /^#[0-9A-Fa-f]{6}$/.test(s); }
