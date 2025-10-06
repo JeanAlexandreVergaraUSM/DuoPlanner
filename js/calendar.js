@@ -2,7 +2,7 @@
 import { db } from './firebase.js';
 import { $, state } from './state.js';
 import {
-  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, getDocs
+  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, getDocs , updateDoc 
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 /* ================= Estado ================= */
@@ -542,3 +542,98 @@ function paintSharedEvents(){
 /* ================= Utils ================= */
 function addMonths(d, n){ const nd = new Date(d.getTime()); nd.setMonth(nd.getMonth()+n); return nd; }
 function isoDate(y, m, d){ return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
+
+export async function listReminders({ range='today' }) {
+  if (!state.currentUser) throw new Error('No logueado');
+  const ref = collection(db, 'users', state.currentUser.uid, 'reminders');
+  const snap = await getDocs(ref);
+
+  const now = new Date();
+  let items = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+
+  // 🔹 ignorar suspendidos
+  items = items.filter(r => !r.suspended);
+
+  // 🔹 aplicar rango (hoy, semana, mes)
+  if (range === 'today') {
+    items = items.filter(r => isToday(r.datetime, now));
+  } else if (range === 'week') {
+    items = items.filter(r => isThisWeek(r.datetime, now));
+  } else if (range === 'month') {
+    items = items.filter(r => isThisMonth(r.datetime, now));
+  }
+
+  return items;
+}
+
+
+
+// js/calendar.js
+
+export async function resumeReminder(reminderId) {
+  if (!state.currentUser) throw new Error('No logueado');
+  const ref = doc(db, 'users', state.currentUser.uid, 'reminders', reminderId);
+  await updateDoc(ref, { suspended: false, updatedAt: Date.now() });
+  return { ok:true };
+}
+
+// js/calendar.js
+
+export async function listSuspendedReminders() {
+  if (!state.currentUser) throw new Error('No logueado');
+
+  const ref = collection(db, 'users', state.currentUser.uid, 'reminders');
+  const q = query(ref, where('suspended', '==', true));
+  const snap = await getDocs(q);
+
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function suspendReminder({ reminderId }) {
+  if (!state.currentUser) throw new Error('No logueado');
+  if (!reminderId) throw new Error('Falta ID');
+
+  const ref = doc(db, 'users', state.currentUser.uid, 'reminders', reminderId);
+  await updateDoc(ref, { suspended: true, updatedAt: Date.now() });
+
+  return { ok: true };
+}
+
+// ✅ ListPairReminders con normalización de datetime
+export async function listPairReminders({ range='today' }={}) {
+  if (!state.pairOtherUid) throw new Error('No tienes dúo');
+
+  const ref = collection(db, 'users', state.pairOtherUid, 'reminders');
+  const snap = await getDocs(ref);
+
+  // 🔹 Normaliza datetime: soporta Timestamp o number
+  const normalizeDate = (d) => {
+    if (!d) return null;
+    if (typeof d === 'number') return new Date(d);
+    if (d.toDate) return d.toDate();   // Firestore Timestamp
+    return new Date(d);
+  };
+
+  const items = snap.docs.map(d => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      datetime: normalizeDate(data.datetime)
+    };
+  });
+
+  const now = new Date();
+  if (range === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const end   = new Date(now.getFullYear(), now.getMonth(), now.getDate()+1);
+    return items.filter(it => it.datetime && it.datetime >= start && it.datetime < end);
+  }
+  if (range === 'week') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+    const end   = new Date(start); end.setDate(start.getDate() + 7);
+    return items.filter(it => it.datetime && it.datetime >= start && it.datetime < end);
+  }
+
+  return items;
+}

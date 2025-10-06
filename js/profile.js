@@ -1,6 +1,6 @@
 // js/profile.js
 import { db } from './firebase.js';
-import { doc, onSnapshot, updateDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { doc, onSnapshot, updateDoc,setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { $, state, updateDebug } from './state.js';
 
 let unsubProfile = null; // 👈 NUEVO
@@ -50,14 +50,17 @@ function drawCompressed(img, target=256, quality=0.82){
 function renderAvatarInCircle(dataUrl){
   const circle = document.getElementById('pfAvatarCircle');
   if (!circle) return;
-  if (dataUrl){
+
+  if (dataUrl && !dataUrl.startsWith("emoji:")) {
     circle.textContent = '';
     circle.style.backgroundImage = `url("${dataUrl}")`;
   } else {
     circle.style.backgroundImage = 'none';
-    if (!circle.textContent.trim()) circle.textContent = '👨‍🎓';
+    // si es emoji o vacío → muestra el 👨‍🎓
+    circle.textContent = '👨‍🎓';
   }
 }
+
 
 function normalizePickerToIso(valueFromPicker, prevStored){
   if (valueFromPicker && /^\d{4}-\d{2}-\d{2}$/.test(valueFromPicker)) {
@@ -78,25 +81,56 @@ const CAREERS_BY_UNI = {
 
 /* ================= Listeners ================= */
 export function listenProfile(){
-  // corta sub anterior (por cambio de cuenta)
   if (unsubProfile) { unsubProfile(); unsubProfile = null; }
 
-  const uid = state.currentUser?.uid;       // 👈 protege si no hay user
+  const uid = state.currentUser?.uid;
   if (!uid) return;
 
-  const ref = doc(db,'users', uid);
-  unsubProfile = onSnapshot(ref, (snap)=>{
-    state.profileData = snap.data() || null;
+  const refRoot = doc(db,'users', uid);
+  const refProf = doc(db,'users', uid, 'profile', 'profile');
+
+  // escucha root y subdoc a la vez
+  const mergeAndFill = (rootSnap, profSnap) => {
+    const root = rootSnap?.data() || {};
+    const prof = profSnap?.data() || {};
+    // el subdoc (prof) tiene prioridad sobre el root
+state.profileData = {
+  ...root,
+  ...prof,
+  name: prof?.name || root?.name || root?.fullName || prof?.fullName || ''
+};
+delete state.profileData.fullName; // 🔹 fuerza a ignorar el campo viejo
+
+
+// si ambos tienen nombre, elige el más nuevo o el no vacío
+if (root?.name && !state.profileData.name) state.profileData.name = root.name;
+if (root?.fullName && !state.profileData.name) state.profileData.name = root.fullName;
+if (prof?.name) state.profileData.name = prof.name;
+if (prof?.fullName) state.profileData.name = prof.fullName;
+
 
     fillProfileForm(state.profileData);
     reflectProfileInSemestersUI();
     updateDebug();
     document.dispatchEvent(new Event('profile:changed'));
+  };
+
+  let latestRoot = null, latestProf = null;
+
+  const unsubRoot = onSnapshot(refRoot, (snap)=>{
+    latestRoot = snap;
+    mergeAndFill(latestRoot, latestProf);
+  });
+  const unsubProf = onSnapshot(refProf, (snap)=>{
+    latestProf = snap;
+    mergeAndFill(latestRoot, latestProf);
   });
 
-  // deja a mano el unsubscribe para auth.js
-  state.unsubscribeProfile = () => { unsubProfile?.(); unsubProfile = null; };
+  unsubProfile = ()=>{ unsubRoot(); unsubProf(); };
+  state.unsubscribeProfile = unsubProfile;
 }
+
+
 
 export function clearProfileUI(){
   const set = (id, val='') => { const el = $(id); if (el) el.value = val; };
@@ -163,10 +197,13 @@ export function fillProfileForm(d){
     pfGoogleEmail.value = state.currentUser.email;
   }
 
-  if (pfEmailUni) pfEmailUni.value = d?.emailUniversity || '';
+  if (pfEmailUni) pfEmailUni.value = d?.uniEmail || '';
   if (pfPhone)    pfPhone.value    = d?.phone || '';
 
-  if (pfName) pfName.value = d?.name || '';
+  if (pfName) {
+  pfName.value = d?.fullName || d?.name || '';
+}
+
 
 if (pfBirthday) {
   const serverVal = parseStoredBirthdayToPickerValue(d?.birthday || '');
@@ -189,8 +226,6 @@ if (pfBirthday) {
       // espejo local para que un repintado inmediato no lo borre
       state.profileData = { ...(state.profileData || {}), birthday: v };
 
-      // 🔎 LOG de prueba
-      console.log('[birthday:change] UI->', v);
     });
 
     // opcionales
@@ -203,7 +238,14 @@ if (pfBirthday) {
 
 
   // CAMBIO: null-safe
-  if (pfUniversity) pfUniversity.value = d?.university || '';
+  if (pfUniversity) {
+  const uni = d?.university || '';
+  // Normaliza: si llega "Universidad Mayor", mapear a "UMAYOR"
+  if (uni === 'Universidad Mayor') pfUniversity.value = 'UMAYOR';
+  else if (uni === 'UTFSM' || uni === 'USM') pfUniversity.value = 'USM';
+  else pfUniversity.value = uni;
+}
+
 
   // ⚙️ Inicia oculto y solo muestra si la uni es "OTRA"
   if (pfCustomUniWrap) pfCustomUniWrap.classList.add('hidden');
@@ -246,11 +288,81 @@ if (pfBirthday) {
     pfFavoriteColor.dataset.bound = '1';
   }
 
-  // ── Avatar: enlazar botón + file y pre-cargar si hay uno guardado ─────────
-  const btnAvatar  = $('pfAvatarBtn');
-  const fileAvatar = $('pfAvatarFile');
+const btnAvatar  = $('pfAvatarBtn');
+const fileAvatar = $('pfAvatarFile');
 
-  renderAvatarInCircle(d?.avatarData || null);
+// Renderizar avatar inicial (foto o emoji 👨‍🎓)
+renderAvatarInCircle(d?.avatarData || "emoji:👨‍🎓");
+
+// Crear o buscar botón de eliminar
+let btnDelete = document.getElementById("pfDeleteAvatarBtn");
+if (!btnDelete) {
+  btnDelete = document.createElement("button");
+  btnDelete.id = "pfDeleteAvatarBtn";
+  btnDelete.className = "btn btn-secondary";
+  btnDelete.textContent = "Eliminar foto de perfil";
+  btnAvatar.insertAdjacentElement("afterend", btnDelete);
+}
+
+// Acciones
+if (fileAvatar && !fileAvatar.dataset.bound) {
+  fileAvatar.addEventListener("change", async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (!/^image\//.test(f.type)) {
+      alert("Elige una imagen válida.");
+      return;
+    }
+
+    try {
+      const img = await readFileAsImage(f);
+      const dataUrl = drawCompressed(img, 256, 0.82);
+      renderAvatarInCircle(dataUrl);
+
+      if (!state.currentUser) return;
+      await updateDoc(doc(db, "users", state.currentUser.uid), {
+        avatarData: dataUrl,
+        avatarUpdatedAt: Date.now()
+      });
+
+      btnAvatar.textContent = "Avatar actualizado ✓";
+      setTimeout(() => (btnAvatar.textContent = "Cambiar avatar"), 1500);
+    } catch (err) {
+      console.error(err);
+      alert("No se pudo procesar la imagen.");
+    } finally {
+      e.target.value = "";
+    }
+  });
+  fileAvatar.dataset.bound = "1";
+}
+
+// Acción para eliminar avatar y volver al emoji 👨‍🎓
+if (!btnDelete.dataset.bound) {
+  btnDelete.addEventListener("click", async () => {
+    if (!state.currentUser) return;
+    if (!confirm("¿Seguro que deseas eliminar tu foto de perfil?")) return;
+
+    try {
+      await updateDoc(doc(db, "users", state.currentUser.uid), {
+        avatarData: null,
+        avatarUrl: null,
+        avatarUpdatedAt: Date.now()
+      });
+
+      renderAvatarInCircle("emoji:👨‍🎓");
+      alert("Avatar eliminado. Se restauró el emoji predeterminado 👨‍🎓.");
+    } catch (err) {
+      console.error(err);
+      alert("No se pudo eliminar el avatar.");
+    }
+  });
+  btnDelete.dataset.bound = "1";
+}
+
+
+
+
 
   if (fileAvatar && !fileAvatar.dataset.bound){
     fileAvatar.addEventListener('change', async (e)=>{
@@ -310,7 +422,7 @@ export async function saveProfile(){
   const favCol = $('pfFavoriteColor')?.value || null;
   const rawEmailUni = ( ($('pfEmailUni') || $('pfEmail'))?.value || '' ).trim();
   const rawPhone    = ( ($('pfPhone')    || $('pfTelefono'))?.value || '' ).trim();
-
+  const uid = state.currentUser.uid;
   const uni = uniEl?.value || null;
 
   const emailOk = !rawEmailUni || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmailUni);
@@ -326,9 +438,10 @@ export async function saveProfile(){
   const rawBdayIso = $('pfBirthday')?.value || null;
   const prevStored = state.profileData?.birthday || null;
   const safeBdayIso = normalizePickerToIso(rawBdayIso, prevStored);
+  const typedName = $('pfName')?.value.trim() || null;
 
   const payload = {
-    name: $('pfName')?.value.trim() || null,
+    name: typedName,
     birthday: safeBdayIso ?? null,
     university: uni,
     customUniversity: (uni === 'OTRA' && $('pfCustomUniversity'))
@@ -336,13 +449,25 @@ export async function saveProfile(){
       : null,
     career: careerVal,
     favoriteColor: isValidHex(favCol) ? favCol : null,
-    emailUniversity: rawEmailUni || null,
+    uniEmail: rawEmailUni || null,   // 👈 ahora usa uniEmail
     phone: rawPhone || null,
     updatedAt: Date.now()
   };
-console.log('[saveProfile] payload.birthday =', payload.birthday);
 
-  await updateDoc(doc(db,'users',state.currentUser.uid), payload);
+  // Guarda en Firestore
+   await updateDoc(doc(db, "users", state.currentUser.uid), {
+  avatarData: null,
+  avatarUrl: null,
+  avatarUpdatedAt: null
+});
+
+
+  // Guarda también en subdoc profile/profile
+  const profRef = doc(db,'users',uid,'profile','profile');
+  await setDoc(profRef, payload, { merge:true });
+
+  // 🔹 Reflejo inmediato en el frontend
+  state.profileData = { ...(state.profileData || {}), ...payload };
 
   const btn = document.getElementById('pfSaveBtn');
   if (btn) {
@@ -355,10 +480,11 @@ console.log('[saveProfile] payload.birthday =', payload.birthday);
     }, 1800);
   }
 
-  // 🔹 Limpia la marca dirty del date para que vuelva a obedecer al server
+  // Limpia "dirty" del date
   const bInp = document.getElementById('pfBirthday');
   if (bInp) delete bInp.dataset.dirty;
 }
+
 
 export function reflectProfileInSemestersUI(){
   const hasUni = !!(state.profileData && state.profileData.university &&
@@ -456,12 +582,20 @@ export function mountPartnerProfileCard(){
     const d = snap.data() || {};
     const pav = $('pp-avatar');
     if (pav){
-      if (d.avatarData){
-        pav.style.backgroundImage = `url("${d.avatarData}")`;
-      } else {
-        pav.style.backgroundImage = 'none';
-        pav.style.background = '#444';
-      }
+      if (d.avatarData) {
+  pav.style.backgroundImage = `url("${d.avatarData}")`;
+  pav.textContent = "";
+} else {
+  pav.style.backgroundImage = "none";
+  pav.textContent = "👨‍🎓"; // emoji por defecto
+  pav.style.display = "flex";
+  pav.style.alignItems = "center";
+  pav.style.justifyContent = "center";
+  pav.style.fontSize = "2rem";
+}
+
+
+
     }
 
     $('pp-name').innerHTML   = `<b>Nombre:</b> ${d.name || '—'}`;
@@ -510,3 +644,4 @@ export function ensureCareerBindingOnLoad(){
   uni.addEventListener('change', apply);
   apply();
 }
+

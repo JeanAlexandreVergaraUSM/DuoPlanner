@@ -62,6 +62,16 @@ export function onActiveSemesterChanged(){
 
 /* =================== UI bindings =================== */
 
+// Obtiene {code, name, grade} desde "components" (ya lo mantienes con onSnapshot)
+function gr_collectEvaluationsForSim(){
+  return (components || []).map(c => ({
+    code:  c.key,
+    name:  c.name || c.key,
+    grade: (typeof c.score === 'number' ? c.score : null)
+  }));
+}
+
+
 function bindUi(){
   hideThresholdUi();
 
@@ -76,6 +86,58 @@ $('gr-addEvalBtn')?.addEventListener('click', addEvalFromForm);
 
   // Crear la sección Reglas dentro de #page-notas (aunque esté oculta)
   ensureRulesUI();
+
+function ensureSimButton(){
+  const pageNotas = $('page-notas');
+  if (!pageNotas) return;
+
+  // Card cuyo título es "Cálculo de notas"
+  const calcCard = Array.from(pageNotas.querySelectorAll('.card h3'))
+    .find(h => /c[aá]lculo de notas/i.test(h.textContent))?.closest('.card');
+  if (!calcCard) return;
+
+  // id para estilos de separación
+  if (!calcCard.id) calcCard.id = 'gr-calcCard';
+
+  // No duplicar botón
+  if (calcCard.querySelector('#gr-openSim')) return;
+
+  // Ubicar el <h3> y construir un encabezado flexible (h3 a la izquierda, botón a la derecha)
+  const titleEl = calcCard.querySelector('h3');
+  const simBtn  = document.createElement('button');
+  simBtn.id = 'gr-openSim';
+  simBtn.className = 'ghost';
+  simBtn.textContent = 'Simulador de notas';
+
+  // Si ya existe una fila .row como header, úsala; si no, creamos una
+  let headerRow = titleEl?.closest('.row');
+  if (!headerRow) {
+    headerRow = document.createElement('div');
+    headerRow.className = 'row gr-calcHeader';
+    // movemos el h3 dentro del header y lo colocamos al inicio del card
+    if (titleEl) headerRow.appendChild(titleEl);
+    calcCard.insertBefore(headerRow, calcCard.firstChild);
+  } else {
+    headerRow.classList.add('gr-calcHeader'); // asegurar clase para estilos
+  }
+
+  // Botón a la derecha
+  simBtn.style.marginLeft = 'auto';
+  headerRow.appendChild(simBtn);
+
+  // Click → abrir simulador (protecciones)
+  simBtn.addEventListener('click', () => {
+    const formula = gr_getFormulaStr();
+    if (!formula) { alert('Primero define la Fórmula final.'); return; }
+    const evals = gr_collectEvaluationsForSim();
+    if (!evals.length) { alert('Agrega al menos una evaluación.'); return; }
+    gr_openSimDrawer({ formula, evals });
+  });
+}
+
+
+
+  ensureSimButton();
 
   // 🔹 Panel "Notas de tu pareja" como pestaña
   document.addEventListener('pair:ready', grpPopulateSemesters); // llena select cuando hay pair
@@ -118,15 +180,10 @@ function hideThresholdUi(){
 }
 
 function ensureRulesUI(){
-  // Evitar duplicados
   if ($('gr-rulesCard')) return;
 
   const pageNotas = $('page-notas');
-  if (!pageNotas) return; // por si el HTML cambia
-
-  // Intentamos ubicarlo justo antes del card de "Resultado" dentro de Notas
-  let resultCardInNotas = null;
- try { resultCardInNotas = pageNotas.querySelector('.card:has(.gr-result)'); } catch(_) {}
+  if (!pageNotas) return;
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -145,16 +202,21 @@ function ensureRulesUI(){
     <div id="gr-rulesStatus" class="muted" style="margin-top:6px"></div>
   `;
 
-  if (resultCardInNotas && resultCardInNotas.parentNode === pageNotas) {
-    // Lo insertamos justo ANTES del Card de "Resultado"
-    pageNotas.insertBefore(card, resultCardInNotas);
+  // 👉 localizar el card "🧮 Cálculo de notas"
+  const calcCard = Array.from(pageNotas.querySelectorAll('.card h3'))
+    .find(h => /c[aá]lculo de notas/i.test(h.textContent))?.closest('.card');
+
+  if (calcCard) {
+    // Inserta Reglas justo ANTES de "Cálculo de notas" (queda debajo de Evaluaciones)
+    pageNotas.insertBefore(card, calcCard);
   } else {
-    // Fallback: lo agregamos al final dentro de #page-notas
+    // Fallback: al final
     pageNotas.appendChild(card);
   }
 
   $('gr-saveRules')?.addEventListener('click', saveRules);
 }
+
 
 
 /* =================== Select de ramos =================== */
@@ -175,27 +237,39 @@ async function loadCoursesIntoSelect(){
     opt.textContent = c.name;
     sel.appendChild(opt);
   });
-  if (currentCourseId && state.courses.some(c=>c.id===currentCourseId)){
-    sel.value = currentCourseId;
-  } else {
-    sel.value = state.courses[0].id;
-    currentCourseId = sel.value;
-  }
-  await loadGradingDoc();
-  await watchComponents();
-  await rebuildCrossFinals();
-computeAndRender(); // para que tome las referencias recién cargadas
+  currentCourseId = null;
+sel.value = "";
+state.editingCourseId = null;
+
+// Oculta secciones hasta que elijas
+$('gr-evalsCard')?.classList.add('hidden');
+$('gr-calcCard')?.classList.add('hidden');
+$('gr-summaryCard')?.classList.add('hidden');
+
 
 }
 
 async function onCourseChange(e){
   currentCourseId = e.target.value || null;
+  state.editingCourseId = currentCourseId; 
+
+  if (!currentCourseId){
+    $('gr-evalsCard')?.classList.add('hidden');
+    $('gr-calcCard')?.classList.add('hidden');
+    $('gr-summaryCard')?.classList.add('hidden');
+    return;
+  }
+
+  $('gr-evalsCard')?.classList.remove('hidden');
+  $('gr-calcCard')?.classList.remove('hidden');
+  $('gr-summaryCard')?.classList.remove('hidden');
+
   await loadGradingDoc();
   await watchComponents();
   await rebuildCrossFinals();
-computeAndRender();
-
+  computeAndRender();
 }
+
 
 
 /* =================== Refs Firestore =================== */
@@ -509,11 +583,12 @@ let lastErr = '';
 if (header.finalExpr && header.finalExpr.trim()!==''){
   try{
     final = safeEvalExpr(header.finalExpr, values, {
-      avg, min: Math.min, max: Math.max,
-      final:      (name)=> lookupFinalByName(name),
-      finalCode:  (code)=> lookupFinalByCode(code),
-      finalId:    (id)=>   lookupFinalById(id)
-    });
+  avg, min: Math.min, max: Math.max,
+  final:      (name)=> lookupFinalByName(name),
+  finalCode:  (code)=> lookupFinalByCode(code),
+  finalId:    (id)=>   lookupFinalById(id)
+});
+
     if (typeof final === 'number' && isFinite(final)){
       final = truncate(final, header.scale);
     } else {
@@ -526,11 +601,7 @@ if (header.finalExpr && header.finalExpr.trim()!==''){
 }
 
 
-// ⚠️ Muestra el error (y deja el flag en dataset para inspección avanzada)
-const errBox = $('gr-formulaError');
-if (errBox){
-  errBox.textContent = lastErr ? `Error en fórmula: ${lastErr}` : '';
-}
+
 $('gr-rulesStatus') && ( $('gr-rulesStatus').dataset.formulaError = lastErr );
 
 
@@ -757,6 +828,43 @@ function renderResult(res){
 
 /* =================== Helpers =================== */
 
+// ====== SIMULADOR: helpers ======
+// Reemplaza la versión anterior
+function gr_getFormulaStr() {
+  return (document.getElementById('gr-finalExpr')?.value || '').trim();
+}
+
+function gr_readRulesText() {
+  return (document.getElementById('gr-rulesText')?.value || '').trim();
+}
+function gr_parseRulesArr() {
+  const t = gr_readRulesText();
+  if (!t) return [];
+  return t.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+
+// Intenta leer evaluaciones + notas actuales desde la UI de Notas.
+// Ajusta los selectores si tus inputs usan otros ids/clases.
+function gr_collectEvaluationsFromUI() {
+  // Esperamos filas con inputs de Código y Nota (ej. "C1" y "62" o "5.5")
+  // Fallback genérico:
+  const rows = Array.from(document.querySelectorAll('[data-gr-eval-row], .gr-eval-row'));
+  const list = [];
+  if (rows.length) {
+    rows.forEach(r => {
+      const code = r.querySelector('[data-code], .gr-code, input[placeholder*="C1"], input[placeholder*="T1"]')?.value?.trim() || '';
+      const name = r.querySelector('[data-name], .gr-name, input[placeholder*="Certamen"], input[placeholder*="Proyecto"]')?.value?.trim() || '';
+      const gradeRaw = r.querySelector('[data-grade], .gr-grade, input[placeholder*="62"], input[placeholder*="5.5"]')?.value?.trim() || '';
+      const g = gradeRaw ? Number(gradeRaw.replace(',', '.')) : null;
+      if (code) list.push({ code, name: name || code, grade: (Number.isFinite(g) ? g : null) });
+    });
+  }
+  // Si tu módulo ya tiene un modelo JS de evaluaciones, reemplaza este lector por ese arreglo.
+  return list;
+}
+
+
+
 function debounce(fn, ms){
   let t = null;
   return (...args)=>{
@@ -810,19 +918,44 @@ function prepareForEval(expr){
   return expr.replace(/(\d+(?:\.\d+)?)\s*%/g, (_, n) => `(${n}/100)`);
 }
 
-// ✅ versión buena y probada
+// ✅ Evalúa expr tratando cualquier código no definido como 0
 function safeEvalExpr(expr, vars, fns = {}){
   const normalized = normalizeExpr(expr);
   const withQuoted = autoQuoteFunctionArgs(normalized);
+
+  // enmascara strings para no confundir identificadores dentro de comillas
   const masked = withQuoted.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '0');
-  if (!/^[\w\s\.\+\-\*\/\(\),%]+$/.test(masked)) {
+
+  // solo permitimos letras, dígitos, _, ., +,-,*,/,%, comas y paréntesis
+  if (!/^[\w\s\.\+\-\*\/\(\),%<>!=]+$/.test(masked)) {
     throw new Error('La fórmula contiene caracteres no permitidos.');
   }
+
+  // convierte % a /100 para evaluar
   const e = prepareForEval(withQuoted);
 
+  // 1) recolecta identificadores presentes en la expresión
+  const ids = (masked.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) || []);
+
+  // funciones permitidas que NO deben convertirse en variables
+  const builtinFns = new Set(['avg','min','max','final','finalCode','finalId']);
+
+
+  // palabras JS que tampoco
+  const jsWords = new Set(['NaN','Infinity','Math','true','false']);
+
+  // 2) arma claves/valores con vars existentes
   const keys = Object.keys(vars);
   const vals = keys.map(k => vars[k] ?? 0);
 
+  // 3) agrega como variables = 0 todos los ids desconocidos
+  const have = new Set([...keys, ...Object.keys(fns)]);
+  for (const id of ids) {
+    if (builtinFns.has(id) || jsWords.has(id)) continue;
+    if (!have.has(id)) { keys.push(id); vals.push(0); have.add(id); }
+  }
+
+  // 4) evalúa con funciones y variables
   const fnNames = Object.keys(fns);
   const fnVals  = Object.values(fns);
 
@@ -831,6 +964,21 @@ function safeEvalExpr(expr, vars, fns = {}){
 }
 
 
+// Extrae identificadores tipo "C1", "T2", "P1" desde la fórmula (excluye funciones)
+function parseCodesFromFormula(formula){
+  const normalized = normalizeExpr(formula || '');
+  const withQuoted = autoQuoteFunctionArgs(normalized);
+  // enmascara strings para no confundir identificadores dentro de comillas
+  const masked = withQuoted.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '0');
+  // tokens tipo identificador
+  const toks = masked.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) || [];
+  const reserved = new Set(['avg','min','max','final','finalCode','finalId','NaN','Infinity','Math','true','false']);
+  // filtra los que claramente son funciones (token seguido de "(" en el texto original)
+  const fnCall = new Set((withQuoted.match(/\b[A-Za-z_][A-Za-z0-9_]*\s*\(/g) || [])
+                   .map(s => s.replace('(','').trim()));
+  const ids = toks.filter(t => !reserved.has(t) && !fnCall.has(t));
+  return [...new Set(ids)];
+}
 
 
 
@@ -1010,19 +1158,23 @@ function cleanupPartnerSubs(){ if (_grpUnsubCourses){ _grpUnsubCourses(); _grpUn
 
 async function subscribePartnerGrades(semId){
   cleanupPartnerSubs();
-  const list = $('gr-sh-list'); if (list) list.innerHTML = '';
+  const list = $('gr-sh-list'); 
+  if (list) list.innerHTML = '';
   if (!state.pairOtherUid || !semId) return;
 
   // universidad para escala/umbral por defecto
   const semSnap = await getDoc(doc(db,'users',state.pairOtherUid,'semesters',semId));
   const uniReadable = semSnap.exists() ? (semSnap.data().universityAtThatTime || '') : '';
   const SCALE = /mayor/i.test(uniReadable) ? 'MAYOR' : 'USM';
-  const THR   = SCALE==='MAYOR' ? 3.95 : 54.5;
 
   // cursos del semestre (pareja)
   const coursesRef = collection(db,'users',state.pairOtherUid,'semesters',semId,'courses');
   _grpUnsubCourses = onSnapshot(query(coursesRef, orderBy('name')), async (snap)=>{
-    const rows = [];
+    if (!snap.size){ renderPartnerRows([]); return; }
+
+    // -------- PRIMERA PASADA: preparar data y finals preliminares --------
+    const finalsByCode = {};
+    const tempRows = [];
 
     for (const c of snap.docs){
       const cData = c.data() || {};
@@ -1033,17 +1185,14 @@ async function subscribePartnerGrades(semId){
       const metaSnap = await getDoc(metaRef);
       const meta = metaSnap.exists() ? metaSnap.data() : { scale:SCALE, finalExpr:'', rulesText:'' };
 
-      // componentes
-      const compsCol = collection(
-  db, 'users', state.pairOtherUid, 'semesters', semId,
-  'courses', courseId, 'grading', 'meta', 'components'
-);
-const compsSnap = await getDocs(compsCol);
-const comps = compsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      // comps
+      const compsCol = collection(db,'users',state.pairOtherUid,'semesters',semId,'courses',courseId,'grading','meta','components');
+      const compsSnap = await getDocs(compsCol);
+      const comps = compsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-      // calcular final
+      // valores
       const vals = {};
-      const isMayor = (meta.scale === 'MAYOR');
+      const isMayor = (meta.scale==='MAYOR');
       const min = isMayor ? 1 : 0;
       const max = isMayor ? 7 : 100;
       comps.forEach(k=>{
@@ -1051,54 +1200,608 @@ const comps = compsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
         if (v!=null && k.key) vals[k.key] = v;
       });
 
-      let final = null;
+      // final preliminar sin cross-refs
+      let prelim = null;
       try{
         if ((meta.finalExpr||'').trim()){
-          final = safeEvalExpr(meta.finalExpr, vals, { avg, min:Math.min, max:Math.max });
-          if (typeof final==='number' && isFinite(final)) final = truncate(final, meta.scale);
-          else final = null;
+          prelim = safeEvalExpr(meta.finalExpr, vals, {
+            avg, min: Math.min, max: Math.max,
+            final: ()=>NaN, finalCode: ()=>NaN, finalId: ()=>NaN
+          });
+          if (typeof prelim==='number' && isFinite(prelim)){
+            prelim = truncate(prelim, meta.scale);
+          } else prelim = null;
+        }
+      }catch{ prelim = null; }
+
+      finalsByCode[(cData.code||'').toLowerCase()] = prelim;
+      tempRows.push({ cData, comps, vals, meta, prelim });
+    }
+
+    // -------- SEGUNDA PASADA: calcular finals con soporte finalCode --------
+    const rows = [];
+    for (const r of tempRows){
+      let final = r.prelim;
+      try{
+        if ((r.meta.finalExpr||'').trim()){
+          final = safeEvalExpr(r.meta.finalExpr, r.vals, {
+            avg,
+            min: Math.min,
+            max: Math.max,
+            final: ()=>NaN,
+            finalCode: (code)=>{
+              const k = (code||'').toString().toLowerCase();
+              return finalsByCode[k] ?? NaN;
+            },
+            finalId: ()=>NaN
+          });
+          if (typeof final==='number' && isFinite(final)){
+            final = truncate(final, r.meta.scale);
+          } else final = null;
         }
       }catch{ final = null; }
 
-      const thr = (meta.scale==='MAYOR') ? 3.95 : 54.5;
-      const rules = parseRules(meta.rulesText || '');
-      const rulesEval = evaluateRules(rules, vals);
+      const thr = (r.meta.scale==='MAYOR') ? 3.95 : 54.5;
+      const rules = parseRules(r.meta.rulesText || '');
+      const rulesEval = evaluateRules(rules, r.vals);
       const status = (final!=null && final>=thr && rulesEval.allOk) ? 'Aprobado' : (final==null ? '—' : 'Reprobado');
 
-      rows.push({ name: cData.name || 'Ramo', final, scale: meta.scale || SCALE, status });
+      rows.push({
+        name: r.cData.name || 'Ramo',
+        code: r.cData.code || '',
+        final,
+        scale: r.meta.scale || SCALE,
+        status
+      });
     }
 
     renderPartnerRows(rows);
   });
 }
 
+
 // 3.4 Render minimalista (sin depender de clases CSS especiales)
 function renderPartnerRows(rows){
   const host = $('gr-sh-list'); if (!host) return;
   host.innerHTML = '';
+
   if (!rows.length){
     host.innerHTML = `<div class="muted">No hay ramos en ese semestre.</div>`;
     return;
   }
 
   rows.forEach(r=>{
-    const val = (r.final==null)
-      ? '—'
+    const val = (r.final==null) ? '—'
       : (r.scale==='MAYOR'
           ? (Math.trunc(r.final*100)/100).toFixed(2)
           : (Math.trunc(r.final*10)/10).toFixed(1));
-    const color = r.status==='Aprobado' ? '#22c55e' : (r.status==='Reprobado' ? '#ef4444' : 'var(--muted)');
+
+    const color = r.status==='Aprobado'
+      ? '#22c55e'
+      : (r.status==='Reprobado' ? '#ef4444' : '#aaa');
+
     const row = document.createElement('div');
-    row.className = 'course-item';
+    row.className = 'grade-item'; // usa mismo estilo que notas propias
     row.innerHTML = `
-      <div>
-        <div><b>${esc(r.name)}</b></div>
-        <div class="course-meta">Final: ${val}</div>
+      <div style="flex:1">
+        <div style="font-weight:700">${esc(r.name)}</div>
+        <div class="muted">Nota final: <b>${val}</b></div>
       </div>
-      <div class="inline">
-        <span style="font-weight:700;color:${color}">${r.status}</span>
+      <div style="font-weight:700;color:${color}">
+        ${r.status}
       </div>
     `;
     host.appendChild(row);
   });
+}
+
+function valsFromComps(comps, meta){
+  const vals = {};
+  const isMayor = (meta.scale==='MAYOR');
+  const min = isMayor ? 1 : 0;
+  const max = isMayor ? 7 : 100;
+  comps.forEach(k=>{
+    const v = typeof k.score==='number' ? Math.max(min, Math.min(max, k.score)) : null;
+    if (v!=null && k.key) vals[k.key] = v;
+  });
+  return vals;
+}
+
+
+// ====== SIMULADOR: Drawer, evaluación, persistencia ======
+
+
+function gr_openSimDrawer({ formula, evals }) {
+  // Cierra si ya existe
+  document.getElementById('gr-simDrawer')?.remove();
+  document.getElementById('gr-simBackdrop')?.remove();
+
+  // ===== Backdrop que bloquea toda la app =====
+  const backdrop = document.createElement('div');
+  backdrop.id = 'gr-simBackdrop';
+  Object.assign(backdrop.style, {
+    position: 'fixed', inset: '0', zIndex: 9998,
+    background: 'rgba(0,0,0,0.35)',
+    backdropFilter: 'blur(1px)'
+  });
+
+  // Bloquea scroll del body mientras esté abierto
+  document.body.classList.add('sim-lock');
+
+  // ===== Drawer (ventana de simulación) =====
+  const drawer = document.createElement('div');
+  drawer.id = 'gr-simDrawer';
+  Object.assign(drawer.style, {
+    position: 'fixed', top: '0', right: '0', height: '100vh',
+    width: '420px', background: 'rgba(18,18,30,.98)', backdropFilter: 'blur(6px)',
+    borderLeft: '1px solid rgba(255,255,255,.08)', boxShadow: '0 0 24px rgba(0,0,0,.45)',
+    zIndex: 9999, padding: '16px 16px 90px 16px', overflowY: 'auto'
+  });
+
+  // Evita que los clics pasen al backdrop
+  drawer.addEventListener('click', (e) => e.stopPropagation());
+
+  drawer.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <h3 style="margin:0">Simulador de notas</h3>
+      <span class="muted" style="font-size:12px;opacity:.8">(${esc(formula)})</span>
+    </div>
+
+    <div class="card" style="margin-top:4px">
+      <h4 style="margin:0 0 6px">Evaluaciones</h4>
+      <div id="gr-simForm"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h4 style="margin:0 0 6px">Resumen de la simulación</h4>
+      <div id="gr-simSummary" class="muted">—</div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h4 style="margin:0 0 6px">Reglas del ramo (simulación)</h4>
+      <div id="gr-simRules" class="muted">—</div>
+    </div>
+
+    <div style="position:fixed; right:16px; bottom:16px; display:flex; gap:8px;">
+      <button id="gr-simSave" class="primary">Guardar simulación</button>
+      <button id="gr-simClose" class="ghost">Salir</button>
+    </div>
+  `;
+
+  // Inserta backdrop y drawer (orden importa)
+  document.body.appendChild(backdrop);
+  document.body.appendChild(drawer);
+
+  // Cerrar (compartido por botón, ESC y click en backdrop)
+  const doClose = async () => {
+    const wants = confirm('¿Guardar esta simulación antes de salir?');
+    if (wants) {
+      const snap = recompute();
+      try { await gr_saveSimulation(snap.gradesMap, formula); } catch(_) {}
+    }
+    backdrop.remove();
+    drawer.remove();
+    document.body.classList.remove('sim-lock');
+  };
+
+  backdrop.addEventListener('click', doClose);
+  drawer.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') doClose();
+  });
+  drawer.querySelector('#gr-simClose')?.addEventListener('click', doClose);
+
+  // Trap de foco dentro del drawer
+  trapFocus(drawer);
+
+  const formHost = drawer.querySelector('#gr-simForm');
+
+  // ----- Evaluaciones: reales + faltantes según la fórmula -----
+  const existing = new Map((evals || []).map(e => [e.code, e.grade]));
+  const codesInFormula = parseCodesFromFormula(formula);
+  const existingCodes  = new Set((evals || []).map(e => e.code));
+  const allCodes       = [...new Set([...existingCodes, ...codesInFormula])];
+
+ // --- NUEVO BLOQUE ---
+const rows = [];
+
+for (const code of allCodes) {
+  const ev = (evals || []).find(e => e.code === code) || { name: code };
+  const val = existing.get(code);
+  const isMayor = (header.scale === 'MAYOR');
+  const min  = isMayor ? 1 : 0;
+  const max  = isMayor ? 7 : 100;
+  const step = isMayor ? 0.1 : 1;
+  const autoBadge = existingCodes.has(code) ? '' :
+    `<span class="muted" style="font-size:12px;margin-left:6px;opacity:.7">(auto)</span>`;
+
+  rows.push(`
+    <div class="row" style="align-items:center;gap:8px;margin:6px 0" data-sim-code="${esc(code)}">
+      <div style="min-width:76px"><b>${esc(code)}</b>${autoBadge}</div>
+      <div style="flex:1">${esc(ev.name || code)}</div>
+      <input type="number" step="${step}" min="${min}" max="${max}" style="width:110px" placeholder="—" value="${val ?? ''}">
+    </div>
+  `);
+}
+
+// 🔹 Detección de referencias a otros ramos (finalCode / final)
+const matches = [...formula.matchAll(/finalCode\(["'](.+?)["']\)/g)];
+for (const m of matches) {
+  const refCode = m[1];
+  const finalVal = lookupFinalByCode(refCode);
+  if (isFinite(finalVal)) {
+    rows.push(`
+      <div class="row" style="align-items:center;gap:8px;margin:6px 0;opacity:.85" data-sim-ref="${esc(refCode)}">
+        <div style="min-width:76px"><b>NF</b></div>
+        <div style="flex:1">Nota final de ${esc(refCode)}</div>
+        <input type="number" readonly value="${finalVal}" style="width:110px;opacity:.7;background:#222;border:none;color:#ccc">
+      </div>
+    `);
+  } else {
+    rows.push(`
+      <div class="row" style="align-items:center;gap:8px;margin:6px 0;opacity:.75" data-sim-ref="${esc(refCode)}">
+        <div style="min-width:76px"><b>NF</b></div>
+        <div style="flex:1;color:#aaa">Nota final de ${esc(refCode)}</div>
+        <div style="width:110px;text-align:center;color:#f87171">—</div>
+      </div>
+    `);
+  }
+}
+
+formHost.innerHTML = rows.join('');
+
+const nameRefs = [...formula.matchAll(/final\(["'](.+?)["']\)/g)];
+for (const m of nameRefs) {
+  const refName = m[1];
+  const finalVal = lookupFinalByName(refName);
+  if (isFinite(finalVal)) {
+    formHost.insertAdjacentHTML('beforeend', `
+      <div class="row" style="align-items:center;gap:8px;margin:6px 0;opacity:.85" data-sim-ref="${esc(refName)}">
+        <div style="min-width:76px"><b>NF</b></div>
+        <div style="flex:1">Nota final de ${esc(refName)}</div>
+        <input type="number" readonly value="${finalVal}" style="width:110px;opacity:.7;background:#222;border:none;color:#ccc">
+      </div>
+    `);
+  }
+}
+
+
+  // ----- Recalcular -----
+  const recompute = () => {
+    const map = {};
+    formHost.querySelectorAll('[data-sim-code]').forEach(row => {
+      const c = row.getAttribute('data-sim-code');
+      const v = row.querySelector('input')?.value?.trim();
+      const n = v ? Number(String(v).replace(',','.')) : null;
+      map[c] = (Number.isFinite(n) ? n : 0);
+    });
+
+    let result = null, err = null;
+    try {
+      result = safeEvalExpr(formula, { ...map }, {
+  avg,
+  min: Math.min,
+  max: Math.max,
+  final: (name) => lookupFinalByName(name),
+  finalCode: (code) => lookupFinalByCode(code),
+  finalId: (id) => lookupFinalById(id)
+});
+
+      if (typeof result === 'number' && isFinite(result)) result = truncate(result, header.scale);
+      else result = null;
+    } catch(e) {
+      err = e?.message || String(e || '');
+      result = null;
+    }
+
+    const rules = parseRules(header.rulesText || '');
+const rulesEval = evaluateRules(rules, map);
+
+// Umbral según escala
+const thr = (header.scale === 'MAYOR') ? 3.95 : 54.5;
+
+// Mensaje de “necesitas”
+let needMsg = '';
+if (err) {
+  needMsg = '';
+} else if (result == null) {
+  needMsg = 'Ingresa valores para simular.';
+} else {
+  const parts = [];
+  if (result < thr) {
+    const diff = thr - result;
+    parts.push(
+      header.scale === 'MAYOR'
+        ? `Subir la nota final en ${diff.toFixed(2)} pts.`
+        : `Subir la nota final en ${diff.toFixed(1)} pts.`
+    );
+  }
+  if (!rulesEval.allOk) {
+    const faltan = rulesEval.unmet.map(u => u.text);
+    if (faltan.length) {
+      parts.push(`Cumplir reglas pendientes: ${faltan.map(esc).join('; ')}.`);
+    }
+  }
+  needMsg = parts.length ? parts.join(' ') : 'Nada más. Ya apruebas.';
+}
+
+// Render del resumen
+const sumEl = drawer.querySelector('#gr-simSummary');
+sumEl.innerHTML = err
+  ? `<div style="color:#f87171">Error en fórmula: ${esc(err)}</div>`
+  : `
+    <div>Promedio simulado: <b>${result==null ? '—' : result}</b></div>
+    <div class="muted" style="margin-top:6px">(Usa tu fórmula final actual)</div>
+    <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:10px 0">
+    <div><b>Necesitas para aprobar</b></div>
+    <div style="margin-top:4px">${needMsg}</div>
+  `;
+
+
+    const rulesEl = drawer.querySelector('#gr-simRules');
+    if (!rules.length) {
+      rulesEl.textContent = 'No hay reglas definidas.';
+    } else {
+      const ok = rulesEval.items.filter(x => x.ok).length;
+      rulesEl.innerHTML = `
+        <div style="margin-bottom:6px">Cumplidas: <b>${ok}/${rules.length}</b></div>
+        <ul style="margin:0 0 0 18px;padding:0;list-style:disc;">
+          ${rulesEval.items.map(x => `<li style="color:${x.ok ? '#22c55e' : '#ef4444'}">${esc(x.text)}</li>`).join('')}
+        </ul>
+      `;
+    }
+    return { gradesMap: map, result };
+  };
+
+  formHost.addEventListener('input', recompute);
+  recompute();
+
+  // ----- Guardar -----
+  drawer.querySelector('#gr-simSave')?.addEventListener('click', async () => {
+    const snap = recompute();
+    try {
+      const r = await gr_saveSimulation(snap.gradesMap, formula);
+      alert(r?.where === 'cloud' ? 'Simulación guardada en la nube.' : 'Simulación guardada');
+    } catch(e) {
+      console.error(e);
+      alert('No se pudo guardar la simulación.');
+    }
+  });
+
+  // ----- Autocargar última simulación (fallback cloud → local) -----
+  gr_loadLastSimulation().then(last => {
+    if (!last) return;
+    formHost.querySelectorAll('[data-sim-code]').forEach(row => {
+      const c = row.getAttribute('data-sim-code') || '';
+      const inp = row.querySelector('input');
+      if (!inp) return;
+      // tolerante a mayúsculas/minúsculas y claves normalizadas
+      const v = last[c] ?? last[c.toUpperCase()] ?? last[c.toLowerCase()];
+      if (v != null) inp.value = String(v);
+    });
+    recompute();
+  }).catch(()=>{});
+
+
+}
+
+// Atrapa el foco dentro del drawer (Tab / Shift+Tab)
+function trapFocus(container){
+  const focusable = () => Array.from(container.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  )).filter(el => !el.hasAttribute('disabled') && el.tabIndex !== -1);
+
+  const first = () => focusable()[0];
+  const last  = () => focusable().slice(-1)[0];
+
+  setTimeout(() => first()?.focus(), 0);
+
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const f = focusable();
+    if (!f.length) return;
+    const current = document.activeElement;
+    if (e.shiftKey) {
+      if (current === f[0]) { e.preventDefault(); last()?.focus(); }
+    } else {
+      if (current === f[f.length - 1]) { e.preventDefault(); first()?.focus(); }
+    }
+  });
+}
+
+
+
+// Guarda una simulación (varias por ramo) y también "__last__" para autocompletar
+async function gr_saveSimulation(gradesMap, formulaStr) {
+  // Normaliza claves a MAYÚSCULAS para evitar descalces C2/c2
+  const normGrades = {};
+  Object.keys(gradesMap || {}).forEach(k => { normGrades[String(k).toUpperCase()] = gradesMap[k]; });
+
+  const payload = {
+    formula: formulaStr,
+    grades: normGrades,
+    rules: parseRules(header.rulesText || ''),
+    semId: state.activeSemesterId || null,
+    courseId: state.editingCourseId || null,
+    createdAt: Date.now()
+  };
+
+  if (state.currentUser && state.activeSemesterId && state.editingCourseId) {
+    try {
+      const base = [
+        'users', state.currentUser.uid,
+        'semesters', state.activeSemesterId,
+        'courses', state.editingCourseId,
+        'simulations'
+      ];
+      await addDoc(collection(db, ...base), payload);              // histórico
+      await setDoc(doc(db, ...base, '__last__'), payload);         // última
+      return { ok: true, where: 'cloud' };
+    } catch (e) {
+      console.warn('Fallo Firestore, usando localStorage:', e);
+      // sigue a local
+    }
+  }
+
+  const key = `sim:last:${state.activeSemesterId || 'SEM'}:${state.editingCourseId || 'COURSE'}`;
+  localStorage.setItem(key, JSON.stringify(payload));
+  return { ok: true, where: 'local' };
+}
+
+
+
+
+async function gr_loadLastSimulation() {
+  const key = `sim:last:${state.activeSemesterId || 'SEM'}:${state.editingCourseId || 'COURSE'}`;
+
+  // 1) Intentar en Firestore si hay sesión y ruta válida
+  if (state.currentUser && state.activeSemesterId && state.editingCourseId) {
+    try {
+      const lastRef = doc(
+        db, 'users', state.currentUser.uid,
+        'semesters', state.activeSemesterId,
+        'courses', state.editingCourseId,
+        'simulations', '__last__'
+      );
+      const snap = await getDoc(lastRef);
+      if (snap.exists()) {
+        const g = snap.data()?.grades || null;
+        return g && typeof g === 'object' ? g : null;
+      }
+      // si no existe en la nube → pasar a local
+    } catch {
+      // continuar a local
+    }
+  }
+
+  // 2) Fallback: localStorage
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const g = data?.grades || null;
+    return g && typeof g === 'object' ? g : null;
+  } catch {
+    return null;
+  }
+}
+
+// Devuelve el objeto de un curso por nombre aproximado
+export function findCourse(name){
+  if (!name || !state.courses) return null;
+  const norm = (s)=> String(s||'').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,'');
+  const n = norm(name);
+  return state.courses.find(c =>
+    norm(c.name).includes(n) || norm(c.code||'').includes(n)
+  ) || null;
+}
+
+
+
+
+
+
+
+
+// ===================== Helpers =====================
+async function calcCourseAverage(courseDoc) {
+  // Para cada curso, recorrer sus rules → grades → promedio ponderado
+  const rulesRef = collection(courseDoc.ref, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+
+  let totalWeighted = 0;
+  let totalWeight = 0;
+
+  for (const rule of rulesSnap.docs) {
+    const r = rule.data();
+    const peso = Number(r.peso) || 0;
+
+    const gradesRef = collection(rule.ref, 'grades');
+    const gradesSnap = await getDocs(gradesRef);
+    const notas = gradesSnap.docs.map(g => Number(g.data().valor)).filter(x => !isNaN(x));
+
+    if (notas.length > 0) {
+      const avg = notas.reduce((a,b)=>a+b,0) / notas.length;
+      totalWeighted += avg * (peso/100);
+      totalWeight += peso;
+    }
+  }
+
+  return totalWeight > 0 ? +(totalWeighted).toFixed(2) : null;
+}
+
+// ===================== Funciones públicas =====================
+
+// Calcular promedio ponderado del semestre
+export async function calcPromedioSemestre(semId) {
+  if (!state.currentUser) return null;
+  const semRef = collection(db, 'users', state.currentUser.uid, 'semesters', semId, 'courses');
+  const coursesSnap = await getDocs(semRef);
+
+  let sum = 0, count = 0;
+  for (const courseDoc of coursesSnap.docs) {
+    const avg = await calcCourseAverage(courseDoc);
+    if (avg != null) { sum += avg; count++; }
+  }
+
+  return count > 0 ? +(sum/count).toFixed(2) : null;
+}
+
+// Nota mínima necesaria en examen final
+export function calcNotaMinima(ramo) {
+  // Supongamos que `ramo` ya trae { rules:[{tipo,peso,notas:[...]}, ...], scale }
+  const scale = ramo.scale || 'USM';
+  const notaAprob = (scale === 'MAYOR') ? 4.0 : 55;
+
+  let acumulado = 0;
+  let pesoAcumulado = 0;
+  let pesoExamen = 0;
+
+  for (const r of (ramo.rules || [])) {
+    const peso = Number(r.peso) || 0;
+    if (r.tipo.toLowerCase().includes('examen')) {
+      pesoExamen = peso;
+      continue;
+    }
+    if (r.notas?.length) {
+      const avg = r.notas.reduce((a,b)=>a+b,0)/r.notas.length;
+      acumulado += avg * (peso/100);
+      pesoAcumulado += peso;
+    }
+  }
+
+  if (pesoExamen === 0) return null; // no hay examen en las reglas
+  const needed = (notaAprob - acumulado) / (pesoExamen/100);
+  return +(needed.toFixed(2));
+}
+
+// ¿Está aprobando?
+export function isPassing(ramo) {
+  const scale = ramo.scale || 'USM';
+  const notaAprob = (scale === 'MAYOR') ? 4.0 : 55;
+  return ramo.promedio >= notaAprob;
+}
+
+// Diferencia con nota mínima
+export function calcBrecha(ramo) {
+  const scale = ramo.scale || 'USM';
+  const notaAprob = (scale === 'MAYOR') ? 4.0 : 55;
+  return +(Math.max(0, notaAprob - (ramo.promedio || 0)).toFixed(2));
+}
+
+// Mejor / peor ramo
+export async function bestWorst(semId) {
+  if (!state.currentUser) return { best:null, worst:null };
+
+  const semRef = collection(db, 'users', state.currentUser.uid, 'semesters', semId, 'courses');
+  const coursesSnap = await getDocs(semRef);
+
+  const results = [];
+  for (const courseDoc of coursesSnap.docs) {
+    const avg = await calcCourseAverage(courseDoc);
+    results.push({ id: courseDoc.id, name: courseDoc.data().name, promedio: avg });
+  }
+
+  if (!results.length) return { best:null, worst:null };
+  results.sort((a,b)=> (b.promedio||0) - (a.promedio||0));
+  return { best: results[0], worst: results[results.length-1] };
 }

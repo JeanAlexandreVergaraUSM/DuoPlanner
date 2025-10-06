@@ -54,3 +54,4 @@ export function setHidden(el, hidden) {
   hidden ? el.classList.add('hidden') : el.classList.remove('hidden');
 }
 export function confirmYes(msg) { return window.confirm(msg); }
+

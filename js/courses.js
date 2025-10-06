@@ -2,35 +2,58 @@
 import { db } from './firebase.js';
 import { $, state } from './state.js';
 import {
-  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy, setDoc, getDoc
+  collection, addDoc, onSnapshot, doc, deleteDoc, query, orderBy,
+  setDoc, getDoc, getDocs, where, serverTimestamp, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
 import { onCoursesChanged as gradesOnCourses } from './grades.js';
 
 // Escala por defecto según la universidad del semestre activo
 let defaultCourseScale = 'USM';
 
+/* ===== Helpers ===== */
+function makeCourseBase({ name = 'Sin nombre', code = '', professor = '', section = '', scale = defaultCourseScale, color = '#3B82F6', asistencia = false } = {}) {
+  return {
+    name: String(name).trim(),
+    code: String(code).trim(),
+    professor: String(professor).trim(),
+    section: String(section).trim(),
+    scale,
+    color: String(color).trim(),
+    asistencia: !!asistencia,   // ✅ nuevo campo
+    createdAt: Date.now()
+  };
+}
+
+
+async function findCourseDoc(courseName, semId = null) {
+  if (!state.currentUser) throw new Error('No hay usuario activo');
+  const semesterId = semId || state.activeSemesterId;
+  if (!semesterId) throw new Error('No hay semestre activo');
+
+  const ref = collection(db, 'users', state.currentUser.uid, 'semesters', semesterId, 'courses');
+  const snap = await getDocs(ref);
+  const match = snap.docs.find(d => (d.data().name || '').toLowerCase().includes(courseName.toLowerCase()));
+
+  if (!match) throw new Error(`Curso "${courseName}" no encontrado`);
+  return match; // docSnap
+}
 
 /* ===== API pública ===== */
 export function initCourses(){ bindUI(); }
 export function setCoursesSubscription(){ subscribeCourses(); }
 export function resetCourseForm(){ _resetCourseForm(); }
 
-
 export function updateFormForUniversity(uniCode){
-  // Determina escala por universidad
   defaultCourseScale = (uniCode === 'UMAYOR') ? 'MAYOR' : 'USM';
-
-  // Ajusta etiqueta de Sección/Paralelo
   const lbl = $('sectParLabel');
   if (lbl) lbl.textContent = (uniCode === 'USM') ? 'Paralelo' : 'Sección/Paralelo';
 
-  // Si por alguna razón aún existe el select de escala en el DOM, lo ocultamos/inhabilitamos
   const scaleSel = $('courseScale');
   const field = scaleSel?.closest?.('.form-field');
   if (field) field.classList.add('hidden');
   if (scaleSel){ scaleSel.value = defaultCourseScale; scaleSel.disabled = true; }
 
-  // Hint opcional (si existe en tu HTML)
   const hint = $('scaleHint');
   if (hint){
     hint.textContent = (defaultCourseScale === 'MAYOR')
@@ -39,7 +62,6 @@ export function updateFormForUniversity(uniCode){
   }
 }
 
-
 /* ===== Estado local ===== */
 let unsubscribeCourses = null;
 
@@ -47,28 +69,19 @@ let unsubscribeCourses = null;
 function bindUI(){
   const saveBtn   = $('saveCourseBtn');
   const cancelBtn = $('cancelEditBtn');
-
-  // color -> muestra hex
   const colorInp = $('courseColor');
   const colorCode = $('courseColorCode');
   colorInp?.addEventListener('input', () => {
     if (colorCode) colorCode.textContent = colorInp.value.toUpperCase();
   });
 
-  // guardar (crear/editar)
-  saveBtn?.addEventListener('click', async () => {
-    await saveCourse();
-  });
-
-  // cancelar edición
+  saveBtn?.addEventListener('click', async () => { await saveCourse(); });
   cancelBtn?.addEventListener('click', () => _resetCourseForm());
 
-  // delegación: editar / eliminar
   document.addEventListener('click', async (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
 
-    // editar
     if (t.matches('.course-edit')) {
       const id = t.dataset.id;
       if (!id || !state.currentUser || !state.activeSemesterId) return;
@@ -85,9 +98,10 @@ function bindUI(){
       state.editingCourseId = id;
       $('saveCourseBtn').textContent = 'Guardar cambios';
       $('cancelEditBtn')?.classList.remove('hidden');
+      $('courseAsistencia').checked = !!d.asistencia;
+
     }
 
-    // eliminar
     if (t.matches('.course-del')) {
       const id = t.dataset.id;
       if (id) await deleteCourse(id);
@@ -97,29 +111,50 @@ function bindUI(){
 
 /* ===== Suscripción ===== */
 function subscribeCourses(){
-  // corta anterior
   if (unsubscribeCourses){ unsubscribeCourses(); unsubscribeCourses = null; }
-    if (!state.currentUser || !state.activeSemesterId) {
-    // deja paleta vacía cuando no hay semestre
+
+  if (!state.currentUser || !state.activeSemesterId) {
     state.courses = [];
     document.dispatchEvent(new Event('courses:changed'));
     return;
   }
 
-
   const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
-  unsubscribeCourses = onSnapshot(query(ref, orderBy('createdAt', 'desc')), (snap) => {
-    // ✅ publicar en estado para que Horario pueda leerlos
-    state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    console.log('[courses] snapshot ->', state.courses.length, state.courses);
 
-    renderCourses(snap);
+  // 🔸 Opción A (segura): sin orderBy en Firestore + orden local
+  unsubscribeCourses = onSnapshot(ref, (snap) => {
+    const list = snap.docs.map(d => {
+      const data = d.data() || {};
+      return {
+        id: d.id,
+        ...data,
+        // normaliza createdAt (puede llegar como Timestamp o ausente)
+        createdAtMs:
+          data.createdAt instanceof Timestamp ? data.createdAt.toMillis() :
+          typeof data.createdAt === 'number' ? data.createdAt :
+          0
+      };
+    });
+
+    // Ordena descendente por fecha
+    list.sort((a,b) => b.createdAtMs - a.createdAtMs);
+
+    state.courses = list;
+
+    // 🔍 debug útil para este problema
+    console.table(state.courses.map(c => ({
+      id: c.id, name: c.name, createdAtMs: c.createdAtMs
+    })));
+
+    renderCourses(snap);           // puedes dejarlo como está
     gradesOnCourses?.();
-
-    // 🔔 avisar al Horario (paleta + grilla)
     document.dispatchEvent(new Event('courses:changed'));
   });
+
+  // 🔹 Más adelante, si todo bien, puedes volver a:
+  // unsubscribeCourses = onSnapshot(query(ref, orderBy('createdAt','desc')), handler)
 }
+
 
 function renderCourses(snap){
   const host = $('coursesList');
@@ -154,9 +189,10 @@ async function saveCourse(){
   const code      = ($('courseCode')?.value || '').trim();
   const professor = ($('courseProfessor')?.value || '').trim();
   const section   = ($('courseSectPar')?.value || '').trim();
-const color     = ($('courseColor')?.value || '#3B82F6').trim();
-// escala viene de la universidad del semestre activo
-const scale     = defaultCourseScale;
+  const color     = ($('courseColor')?.value || '#3B82F6').trim();
+  const scale     = defaultCourseScale;
+  const asistencia = $('courseAsistencia')?.checked || false;
+
 
 
   if (!name){ alert('Ingresa el nombre del ramo.'); return; }
@@ -166,34 +202,35 @@ const scale     = defaultCourseScale;
   if (saveBtn) saveBtn.disabled = true;
 
   try{
-    const base = { name, code, professor, section, scale, color, createdAt: Date.now() };
+    const base = { name, code, professor, section, scale, color, asistencia };
+
 
     if (state.editingCourseId){
-      // update
-      const ref = doc(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses', state.editingCourseId);
-      await setDoc(ref, base, { merge: true });
-    } else {
-      // create
-      const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
-      await addDoc(ref, base);
-    }
+  // update
+  const ref = doc(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses', state.editingCourseId);
+  await setDoc(ref, base, { merge: true });
+} else {
+  // create
+  const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
+  await addDoc(ref, { ...base, createdAt: serverTimestamp() });  // ✅
+}
+
 
     _resetCourseForm();
-    gradesOnCourses?.(); // notificar a Notas tras guardar
+    gradesOnCourses?.();
   } catch(e){
     console.error(e);
     alert(`No se pudo guardar el ramo: ${e?.message || e}`);
   } finally {
     if (saveBtn) saveBtn.disabled = false;
-    // al terminar una edición, el botón "Cancelar" se oculta
     cancelBtn?.classList.add('hidden');
   }
 }
 
+
 async function deleteCourse(id){
   if (!state.currentUser || !state.activeSemesterId) return;
   if (!confirm('¿Eliminar este ramo?')) return;
-
   try{
     await deleteDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses',id));
     if (state.editingCourseId===id) _resetCourseForm();
@@ -219,4 +256,91 @@ function _resetCourseForm(){
 
 function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, s=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[s]));
+}
+
+/* ---------- API para el asistente IA ---------- */
+export async function addCourseToSemester(name, semLabelOrId = null, color = '#3B82F6') {
+  const semId = semLabelOrId || state.activeSemesterId;
+  if (!semId) throw new Error('No hay semestre activo');
+  const ref = collection(db, 'users', state.currentUser.uid, 'semesters', semId, 'courses');
+  const base = makeCourseBase({ name, color, scale: 'USM' });
+  await addDoc(ref, base);
+}
+
+export async function removeCourseFromSemester(name, semId = null) {
+  const match = await findCourseDoc(name, semId);
+  await deleteDoc(match.ref);
+}
+
+export async function getCourseInfo(nameOrCode, semId = null) {
+  const match = await findCourseDoc(nameOrCode, semId);
+  const semesterId = semId || state.activeSemesterId;
+
+  const rulesRef = collection(db, 'users', state.currentUser.uid, 'semesters', semesterId, 'courses', match.id, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+
+  const rules = [];
+  for (const r of rulesSnap.docs) {
+    const rd = r.data();
+    const gradesRef = collection(r.ref, 'grades');
+    const gradesSnap = await getDocs(gradesRef);
+    const grades = gradesSnap.docs.map(g => ({ id:g.id, ...g.data() }));
+    rules.push({ id:r.id, ...rd, grades });
+  }
+
+  return {
+    name: match.data().name || '',
+    code: match.data().code || '',
+    professor: match.data().professor || '',
+    section: match.data().section || '',
+    color: match.data().color || '',
+    scale: match.data().scale || '',
+    rules
+  };
+}
+
+export async function listRules(courseName, semId = null) {
+  const match = await findCourseDoc(courseName, semId);
+  const rulesRef = collection(match.ref, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+  return rulesSnap.docs.map(r => r.data());
+}
+
+export async function addRule(courseName, rule) {
+  const match = await findCourseDoc(courseName);
+  const rulesRef = collection(match.ref, 'rules');
+  await addDoc(rulesRef, rule);
+  return { ok:true };
+}
+
+export async function removeRule(courseName, tipo) {
+  const match = await findCourseDoc(courseName);
+  const rulesRef = collection(match.ref, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+  const target = rulesSnap.docs.find(r => (r.data().tipo||'').toLowerCase() === tipo.toLowerCase());
+  if (!target) throw new Error('No encontré esa regla');
+  await deleteDoc(doc(db, rulesRef.path, target.id));
+  return { ok:true };
+}
+
+export async function addGrade(courseName, ruleTipo, valor, comentario='') {
+  const match = await findCourseDoc(courseName);
+  const rulesRef = collection(match.ref, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+  const ruleDoc = rulesSnap.docs.find(r => (r.data().tipo || '').toLowerCase().includes(ruleTipo.toLowerCase()));
+  if (!ruleDoc) throw new Error('Regla no encontrada');
+  const gradesRef = collection(ruleDoc.ref, 'grades');
+  await addDoc(gradesRef, { valor, comentario, fecha: Date.now() });
+  return { ok:true };
+}
+
+export async function listGrades(courseName, ruleTipo, semId = null) {
+  const match = await findCourseDoc(courseName, semId);
+  const rulesRef = collection(match.ref, 'rules');
+  const rulesSnap = await getDocs(rulesRef);
+  const ruleDoc = rulesSnap.docs.find(r => (r.data().tipo || '').toLowerCase().includes(ruleTipo.toLowerCase()));
+  if (!ruleDoc) throw new Error('Regla no encontrada');
+  const gradesRef = collection(ruleDoc.ref, 'grades');
+  const gradesSnap = await getDocs(gradesRef);
+  return gradesSnap.docs.map(g => ({ id: g.id, ...g.data() }));
 }

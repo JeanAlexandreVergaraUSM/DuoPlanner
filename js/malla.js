@@ -669,14 +669,23 @@ async function saveState(host){
   const uni = state.profileData?.university || 'GEN';
   const career = state.profileData?.career || 'GEN';
   const aprob = Array.from(host.querySelectorAll('.grid-item.aprobado')).map(el=>el.dataset.codigo);
+
+  // Guarda local (lo que usa Progreso para calcular rápido)
   localStorage.setItem(`mallaAprobados:${uni}:${career}`, JSON.stringify(aprob));
 
-  // 🔹 Espejar en Firestore para vista en tiempo real de la pareja
+  // 🚀 Avisa de inmediato al tab Progreso (sin esperar red)
+  try { document.dispatchEvent(new Event('malla:updated')); } catch(_) {}
+
+  // Espejo en Firestore para vista en pareja (opcional/asincrónico)
   if (state.currentUser){
     const ref = doc(db,'users',state.currentUser.uid,'malla','state');
     await setDoc(ref, { career, approved: aprob, updatedAt: Date.now() }, { merge:true });
+
+    // (Opcional) re-avisa tras sincronizar en la nube
+    try { document.dispatchEvent(new Event('malla:updated')); } catch(_) {}
   }
 }
+
 
 function loadState(host, career){
   const uni = state.profileData?.university || 'GEN';
@@ -708,7 +717,7 @@ function setupPartnerToggle(){
   bar.innerHTML = `
     <label class="pill">
       <input type="checkbox" id="malla-view-partner" style="margin-right:8px"/>
-      Ver malla de la otra personas (solo lectura)
+      Ver malla de la otra persona (solo lectura)
     </label>
   `;
   host.prepend(bar);
@@ -822,4 +831,23 @@ async function forceRenderCareer(careerCode){
 
   // Render con la carrera pedida
   renderMalla(careerCode);
+}
+export function parseMalla(csvRows) {
+  const prereqMap = {};
+  csvRows.forEach(r => {
+    const codigo = r.codigo.trim();
+    const prereqs = (r.prerequisitos || '')
+      .split(/[,;]/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    prereqMap[codigo] = prereqs;
+  });
+
+  // guardamos en state
+  state.malla = { prereqMap, rows: csvRows };
+}
+
+export function getPrereqs(course) {
+  const key = String(course||'').toUpperCase().trim();
+  return (window.MALLA_PREREQS && window.MALLA_PREREQS[key]) || [];
 }

@@ -12,11 +12,9 @@ let unsubPairDoc = null; // para cortar la suscripción al documento del pair
 // --- DEBUG helper (activar con ?debug en la URL o window.duoplannerDebug = true) ---
 const DP_DEBUG = new URLSearchParams(location.search).has('debug') || (window?.duoplannerDebug ?? false);
 const TS  = () => new Date().toISOString().split('T')[1].replace('Z','');
-const LOG = (...a) => { if (DP_DEBUG) console.log(`[PAIR ${TS()}]`, ...a); };
 const GRP = (title, obj) => {
   if (!DP_DEBUG) return;
   console.groupCollapsed(`[PAIR ${TS()}] ${title}`);
-  if (obj !== undefined) console.log(obj);
   console.groupEnd();
 };
 
@@ -176,7 +174,7 @@ function parsePairId(input) {
 export async function joinPair(pairId) {
   if (!state.currentUser) return;
 
-  const ref  = doc(db, 'pairs', pairId);
+  const ref = doc(db, 'pairs', pairId);
   const snap = await getDoc(ref);
   if (!snap.exists()) { alert('El ID de party no existe'); return; }
 
@@ -206,6 +204,16 @@ export async function joinPair(pairId) {
   state.currentPairId = pairId;
   state.pairOtherUid  = (final.members || []).find(u => u !== state.currentUser.uid) || null;
 
+  // 🔹 Guardar relación también dentro del perfil de cada usuario
+  const userRef = doc(db, 'users', state.currentUser.uid);
+  const updates = { pairUid: state.pairOtherUid || null, currentPairId: pairId };
+  try {
+    await updateDoc(userRef, updates);
+  } catch {
+    // Si no existe el doc raíz (usuario nuevo), créalo
+    await setDoc(userRef, updates, { merge: true });
+  }
+
   const pairIdEl = $('pairId');
   const copyBtn  = $('copyInviteBtn');
   if (pairIdEl) pairIdEl.textContent = pairId;
@@ -213,11 +221,14 @@ export async function joinPair(pairId) {
 
   lockSharedIfNeeded();
   updateDebug();
+
+  // 🔹 Notificar para que el resto del sistema sepa del cambio
   document.dispatchEvent(new CustomEvent('pair:ready', { detail: { otherUid: state.pairOtherUid }}));
 
   // escucha el pair al que te uniste
   watchCurrentPairDoc(pairId);
 }
+
 
 // Suscribirse al doc del pair para reflejar en vivo cambios
 function watchCurrentPairDoc(pid) {
@@ -228,7 +239,7 @@ function watchCurrentPairDoc(pid) {
   const ref   = doc(db, 'pairs', pid);
   const myUid = state.currentUser?.uid || null; // fija tu uid ahora
 
-  unsubPairDoc = onSnapshot(ref, (snap) => {
+  unsubPairDoc = onSnapshot(ref, async (snap) => {
     if (!snap.exists()) {
       clearPairState();
       return;
@@ -240,6 +251,11 @@ function watchCurrentPairDoc(pid) {
     // actualiza SIEMPRE, aunque no haya otro todavía
     state.currentPairId = pid;
     state.pairOtherUid  = other;
+
+    try {
+      const userRef = doc(db, 'users', myUid);
+      await setDoc(userRef, { pairUid: other || null, currentPairId: pid }, { merge: true });
+    } catch (_) {}
 
     const pairIdEl = $('pairId');
     const copyBtn  = $('copyInviteBtn');

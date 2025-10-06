@@ -187,7 +187,7 @@ if (signOutBtn) {
 
       // Asegura doc de usuario
       try {
-        await ensureUserDoc(user.uid);
+        await ensureUserDoc(user);
       } catch (e) {
         console.error('ensureUserDoc failed:', e);
       }
@@ -218,13 +218,41 @@ if (signOutBtn) {
   });
 }
 
-async function ensureUserDoc(uid) {
-  const ref = doc(db, 'users', uid);
+async function ensureUserDoc(user) {
+  const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
+    // Primera vez
     await setDoc(ref, {
       createdAt: Date.now(),
+      email: user.email || null,
+      displayName: user.displayName || null,
+      photoURL: user.photoURL || null,
+      providerId: user.providerData?.[0]?.providerId || 'google',
       preferences: { showNamesInShared: true, theme: 'dark' },
-    });
+      lastLoginAt: Date.now(),
+    }, { merge: true });
+  } else {
+    // Actualizaciones posteriores (no tocamos createdAt)
+    await setDoc(ref, {
+      email: user.email || null,
+      displayName: user.displayName || null,
+      photoURL: user.photoURL || null,
+      providerId: user.providerData?.[0]?.providerId || 'google',
+      lastLoginAt: Date.now(),
+    }, { merge: true });
   }
+}
+
+export async function aiLogout() {
+  try { await signOut(auth); } catch (e) { console.error(e); }
+}
+
+export async function aiSwitchAccount() {
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signOut(auth);
+    await signInWithPopup(auth, provider);
+  } catch (e) { console.error(e); }
 }

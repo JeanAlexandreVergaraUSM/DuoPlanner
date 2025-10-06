@@ -151,12 +151,15 @@ bindRightClickRoom();
 
   // Compartido
   renderSharedShell();
-  document.addEventListener('pair:ready', () => {
-    populateSharedSemesters();
-    if (state.shared.horario.semId) {
-      subscribeShared(state.shared.horario.semId);
-    }
-  });
+  document.addEventListener('pair:ready', (ev) => {
+  const otherUid = ev.detail?.otherUid;
+  if (otherUid) {
+    populateSharedSemesters();  // vuelve a llenar el select
+  } else {
+    const sel = $('sh-semSel');
+    if (sel) sel.innerHTML = '<option disabled selected>Sin compañero</option>';
+  }
+});
   $('sh-semSel')?.addEventListener('change', (e)=>{
     state.shared.horario.semId = e.target.value || null;
     subscribeShared(state.shared.horario.semId);
@@ -198,10 +201,35 @@ bindRightClickRoom();
   showPropio();
 
 document.addEventListener('courses:changed', () => {
-    console.log('[horario] courses:changed → refrescar paleta/grilla');
     renderPalette();
     renderGrid();
   });
+
+ document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.block-del-btn');
+  if (!btn) return;
+
+  const id = btn.dataset.id;
+  if (!id || !state.currentUser || !state.activeSemesterId) return;
+
+  if (!confirm('¿Eliminar este bloque del horario?')) return;
+
+  try {
+    await deleteDoc(doc(
+      db,
+      'users', state.currentUser.uid,
+      'semesters', state.activeSemesterId,
+      'schedule', id
+    ));
+  } catch(err) {
+    console.error(err);
+    alert('No se pudo eliminar el bloque.');
+  }
+
+
+});
+
+
 
 }
 
@@ -228,8 +256,9 @@ function renderShell(){
       <ul style="margin:4px 0 0 20px; padding:0; list-style:disc;">
         <li>Arrastra un ramo a un módulo.</li>
         <li>La pre-vista indica <b>arriba</b>, <b>completo</b>, <b>abajo</b>, <b>izquierda</b> o <b>derecha</b>.</li>
-        <li>Para eliminar un bloque, haz <b>doble-click</b> sobre él.</li>
+        <li>Para eliminar un bloque, haz <b>click</b> en la X.</li>
         <li>Para editar un bloque, haz <b>click</b> sobre él.</li>
+        <li>Para editar una sala, haz <b>click derecho</b> sobre él.</li>
         <li>Para ver su sala, pase el mouse por encima.</li>
       </ul>
     </div>
@@ -298,6 +327,18 @@ function renderGrid(){
     </div>
   `;
   bindCellDropZones();
+
+// ⬇️ Aquí agregas los botoncitos de eliminar
+  host.querySelectorAll('.placed').forEach(el => {
+    if (!el.querySelector('.block-del-btn')) {
+      const btn = document.createElement('button');
+      btn.className = 'block-del-btn';
+      btn.textContent = '×';
+      btn.dataset.id = el.dataset.id;
+      el.appendChild(btn);
+    }
+  });
+
 }
 
 /* === celda izquierda (numeración y sublíneas) === */
@@ -396,25 +437,7 @@ function bindDnD(){
     }
   });
 
-  document.addEventListener('dblclick', async (e)=>{
-  const t = e.target.closest('.placed'); 
-  if (!t) return;
-  if (!state.currentUser || !state.activeSemesterId) return; // ⬅️ guard
-
-  const id = t.dataset.id; 
-  if (!id) return;
-  try{
-    await deleteDoc(doc(
-      db,
-      'users', state.currentUser.uid,
-      'semesters', state.activeSemesterId,
-      'schedule', id
-    ));
-  }catch(err){
-    console.error(err);
-    alert('No se pudo eliminar el bloque.');
-  }
-});
+  
 
   bindCellDropZones();
 }
@@ -550,9 +573,19 @@ function bindCellDropZones(){
       const ratioY = y / rect.height;
       const ratioX = x / rect.width;
 
-      let vpos = 'full';
-      if (ratioY < 0.33) vpos = 'top';
-      else if (ratioY > 0.66) vpos = 'bottom';
+const mid = rect.height / 2;
+
+let vpos;
+if (y < mid - 10) {        // margen para no ser tan sensible
+  vpos = 'top';
+} else if (y > mid + 10) {
+  vpos = 'bottom';
+} else {
+  vpos = 'full';
+}
+
+
+
 
       let hpos = 'single';
       if (ratioX < 0.4) hpos = 'left';
@@ -561,13 +594,24 @@ function bindCellDropZones(){
       cell.dataset.droppos = vpos; // vertical
       cell.dataset.droph   = hpos; // horizontal
       cell.classList.add('over');
-      cell.classList.toggle('hint-left',   hpos==='left');
-      cell.classList.toggle('hint-center', hpos==='single'); // “single” = centro
-      cell.classList.toggle('hint-right',  hpos==='right');
 
-      cell.classList.toggle('hint-top', vpos==='top');
-      cell.classList.toggle('hint-full', vpos==='full');
-      cell.classList.toggle('hint-bottom', vpos==='bottom');
+
+      // Limpiar primero cualquier hint viejo
+cell.classList.remove(
+  'hint-top','hint-full','hint-bottom',
+  'hint-left','hint-center','hint-right'
+);
+
+// Añadir vertical
+if (vpos === 'top')    cell.classList.add('hint-top');
+if (vpos === 'full')   cell.classList.add('hint-full');
+if (vpos === 'bottom') cell.classList.add('hint-bottom');
+
+// Añadir horizontal
+if (hpos === 'left')   cell.classList.add('hint-left');
+if (hpos === 'single') cell.classList.add('hint-center');
+if (hpos === 'right')  cell.classList.add('hint-right');
+
     });
 
     cell.addEventListener('dragleave', ()=> clearHints(cell));
@@ -594,13 +638,15 @@ function bindCellDropZones(){
       }
 
       if (hereAtPos.length === 1){
-        const existing = hereAtPos[0];
-        const eH = existing.hpos || 'single';
+  const existing = hereAtPos[0];
+  const eH = existing.hpos || 'single';
 
-        if (hpos === 'single'){
-          alert('Ya hay un ramo aquí. Elige izquierda o derecha.');
-          clearHints(cell); return;
-        }
+  // ⚡ solo bloquea si es FULL y ya hay alguien
+  if (pos === 'full' && hpos === 'single'){
+    alert('Ya hay un ramo aquí. Elige izquierda o derecha.');
+    clearHints(cell); 
+    return;
+  }
 
         if (eH === 'single'){
           // Convertimos el existente al lado opuesto del que pediste
@@ -849,4 +895,84 @@ async function populateSharedSemesters(){
     sel.value = firstValid ? firstValid.value : '';
     state.shared.horario.semId = sel.value || null;
   }
+}
+
+/* ===== Guardar / actualizar bloque ===== */
+
+export async function setRoom({ course, day, slot, room }) {
+  if (!state.currentUser || !state.activeSemesterId) throw new Error('No logueado');
+
+  const semId = state.activeSemesterId;
+  const uid = state.currentUser.uid;
+
+  // buscamos el curso
+  const match = (state.courses || []).find(c =>
+    (c.name || '').toLowerCase().includes(String(course).toLowerCase())
+  );
+  if (!match) throw new Error('Curso no encontrado');
+
+  // buscar el bloque correspondiente
+  const schedRef = collection(db, 'users', uid, 'semesters', semId, 'schedule');
+  const snap = await getDocs(schedRef);
+  const blk = snap.docs.find(d => {
+    const data = d.data();
+    return data.courseId === match.id && data.day === day && data.slot === slot;
+  });
+
+  if (!blk) throw new Error('No encontré el bloque en el horario');
+
+  // ✅ actualizar solo sala
+  await updateDoc(blk.ref, { room: room || null, updatedAt: Date.now() });
+
+  return { ok: true, room };
+}
+
+
+
+/* ===== Listar horario actual ===== */
+export async function getMySchedule(semId = null) {
+  if (!state.currentUser) throw new Error('No logueado');
+  const sid = semId || state.activeSemesterId;
+  if (!sid) throw new Error('No hay semestre activo');
+
+  const ref = collection(db, 'users', state.currentUser.uid, 'semesters', sid, 'schedule');
+  const snap = await getDocs(ref);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/* ===== Coincidencias con el dúo ===== */
+export async function overlapWithPair(semId = null) {
+  if (!state.currentUser) throw new Error('No logueado');
+  const sid = semId || state.activeSemesterId;
+  if (!sid) throw new Error('No hay semestre activo');
+  if (!state.pairOtherUid) return { items: [] };
+
+  // tu horario
+  const myRef = collection(db, 'users', state.currentUser.uid, 'semesters', sid, 'schedule');
+  const mySnap = await getDocs(myRef);
+  const mine = mySnap.docs.map(d => ({ ...d.data() }));
+
+  // horario del dúo
+  const pairRef = collection(db, 'users', state.pairOtherUid, 'semesters', sid, 'schedule');
+  const pairSnap = await getDocs(pairRef);
+  const theirs = pairSnap.docs.map(d => ({ ...d.data() }));
+
+  // comparar coincidencias (día + slot)
+  const items = [];
+  for (const m of mine) {
+    for (const t of theirs) {
+      if (m.day === t.day && m.slot === t.slot) {
+        items.push(`${['Lun','Mar','Mié','Jue','Vie'][m.day]} bloque ${m.slot} (${m.courseName} / ${t.courseName})`);
+      }
+    }
+  }
+  return { items };
+}
+
+/* ===== Eliminar bloque ===== */
+export async function removeBlock(blockId, semId = null) {
+  if (!state.currentUser) throw new Error('No logueado');
+  const sid = semId || state.activeSemesterId;
+  await deleteDoc(doc(db, 'users', state.currentUser.uid, 'semesters', sid, 'schedule', blockId));
+  return { ok: true };
 }

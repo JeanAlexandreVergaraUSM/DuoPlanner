@@ -2,9 +2,20 @@
 <html lang="es">
 <head>
 
+  <!-- Export helpers -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" defer></script>
+
+
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>DuoPlanner - Tu compañero académico</title>
+
+<link rel="icon" type="image/png" sizes="32x32" href="./assets/gorro.png?v=5">
+
+<title>DuoPlanner</title>
+
+
+  <title>DuoPlanner</title>
   <!-- Tus estilos personalizados -->
   <link rel="stylesheet" href="./css/styles.css">
 
@@ -163,7 +174,13 @@
     .nav-tab[data-route="#/horario"]::before { content: '📅'; }
     .nav-tab[data-route="#/notas"]::before { content: '📊'; }
     .nav-tab[data-route="#/malla"]::before { content: '🗺️'; }
+    .nav-tab[data-route="#/progreso"]::before { content: '🏁'; }
     .nav-tab[data-route="#/calendario"]::before { content: '📆'; }
+    .nav-tab[data-route="#/asistencia"]::before { content: '📋'; }
+    .nav-tab[data-route="#/party"]::before { content: '🎉'; }
+    .nav-tab[data-route="#/ayuda"]::before { content: '🆘'; }
+
+
 
     /* Botones mejorados */
     .btn {
@@ -866,12 +883,336 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   white-space: nowrap;
 }
 
+/* --- Separación visual entre Reglas y Cálculo --- */
+#gr-rulesCard { 
+  margin-bottom: 14px;            /* espacio abajo */
+}
+#gr-calcCard { 
+  margin-top: 14px;               /* espacio arriba */
+  position: relative;
+}
+
+/* Línea sutil de separación (opcional, queda elegante) */
+#gr-rulesCard::after {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 10px -8px 0 -8px;       /* estira un poco la línea */
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  border-radius: 1px;
+}
+
+/* --- Header de "Cálculo de notas" con botón a la derecha --- */
+.gr-calcHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+#gr-openSim.ghost {
+  border: 1px solid rgba(255,255,255,0.15);
+  background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.15));
+  color: #e0e7ff;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  transition: all 0.25s ease;
+  backdrop-filter: blur(4px);
+}
+
+#gr-openSim.ghost:hover {
+  border-color: rgba(139,92,246,0.6);
+  background: linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.3));
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+
+#gr-openSim.ghost:active {
+  transform: scale(0.96);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3) inset;
+}
+
+
+/* (opc) pequeña separación superior al primer input de la fórmula */
+#gr-calcCard .row + .row { margin-top: 8px; }
+
+
+.sim-lock {
+  overflow: hidden;
+}
+
+.progress-inner{height:100%;
+  background:linear-gradient(90deg, var(--primary, #22c55e), var(--accent, #3b82f6));
+}
+
+.export-bar {
+  display:flex; gap:8px; margin:8px 0 12px;
+}
+@media print {
+  nav, .nav, .export-bar, #pfActions { display:none !important; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+.block-del-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: none;
+  z-index: 2;
+}
+
+.placed:hover .block-del-btn {
+  display: block;
+}
+
+.block-del-btn:hover {
+  background: rgba(239, 68, 68, 0.85); /* rojo suave */
+}
+
+/* --- Preview general --- */
+.cell.slot.over::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border: 2px dashed rgba(255,255,255,0.6);
+}
+
+.cell.slot.over.hint-top::after {
+  content: "";
+  position: absolute;
+  left: var(--pad);
+  right: var(--pad);
+  top: var(--pad);
+  bottom: 50%; /* hasta la mitad */
+  border: 2px dashed rgba(255,255,255,0.6);
+  pointer-events: none;
+}
+
+.cell.slot.over.hint-full::after {
+  content: "";
+  position: absolute;
+  top: var(--pad);
+  bottom: var(--pad);
+  left: var(--pad);
+  right: var(--pad);
+  border: 2px dashed rgba(255,255,255,0.6);
+  pointer-events: none;
+}
+
+.cell.slot.over.hint-bottom::after {
+  content: "";
+  position: absolute;
+  left: var(--pad);
+  right: var(--pad);
+  top: 50%; /* empieza en la mitad */
+  bottom: var(--pad);
+  border: 2px dashed rgba(255,255,255,0.6);
+  pointer-events: none;
+}
+
+
+/* --- Horizontales --- */
+.cell.slot.over.hint-left::after {
+  top: var(--pad);
+  bottom: var(--pad);
+  left: var(--pad);
+  right: 50%;
+}
+
+
+.cell.slot.over.hint-right::after {
+  top: var(--pad);
+  bottom: var(--pad);
+  left: 50%;
+  right: var(--pad);
+}
+
+.cell.slot.over.hint-bottom.hint-left::after {
+  top: 50%;
+  left: var(--pad);
+  right: 50%;
+  bottom: var(--pad);
+}
+
+.cell.slot.over.hint-bottom.hint-right::after {
+  top: 50%;
+  left: 50%;
+  right: var(--pad);
+  bottom: var(--pad);
+}
+
+.att-days {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 0;
+}
+.att-record {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-del-att {
+  font-size: 0.8rem;
+  padding: 2px 6px;
+  background: rgba(239,68,68,0.8);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Oculta nombre e icono en el menú superior */
+#userMenuName,
+#userMenuAvatar {
+  display: none !important;
+}
+
+#page-malla .malla-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+#page-malla .grid-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border-radius: 10px;
+  cursor: pointer;
+  overflow: hidden;
+  padding: 28px 10px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.18);
+}
+
+#page-malla .grid-item::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.18), transparent 22%, transparent 78%, rgba(0,0,0,0.18));
+  pointer-events: none;
+}
+
+#page-malla .grid-item:hover {
+  transform: translateY(-2px);
+}
+
+/* Ajusta el texto interno para que se vea equilibrado */
+#page-malla .grid-item .course-name {
+  font-size: 0.78rem;
+  line-height: 1.15;
+  text-align: center;
+  word-break: break-word;
+  padding: 0 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+#page-malla .grid-item .course-name {
+  font-size: 0.8rem; /* antes usaba clamp(...), podés fijarlo */
+  line-height: 1.2;
+}
+
+
+/* ====== AYUDA ====== */
+#page-ayuda details {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 12px 0;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.25s ease;
+}
+
+#page-ayuda details:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+#page-ayuda summary {
+  font-weight: 600;
+  color: var(--primary-light);
+  font-size: 1.1rem;
+  list-style: none;
+}
+
+#page-ayuda summary::marker,
+#page-ayuda summary::-webkit-details-marker {
+  display: none;
+}
+
+#page-ayuda summary::after {
+  content: "›";
+  float: right;
+  transform: rotate(90deg);
+  transition: transform 0.25s ease;
+}
+
+#page-ayuda details[open] summary::after {
+  transform: rotate(270deg);
+}
+
+.help-subsection {
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+.help-subsection h4 {
+  color: var(--accent-light);
+  font-size: 0.95rem;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.help-subsection ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0 0 8px 0;
+}
+
+.help-subsection li {
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  margin: 3px 0;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+}
+
+.help-subsection code {
+  color: var(--primary-light);
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+}
 
 
 /*termina*/
 
   </style>
 </head>
+
+<script type="module" src="./ai/ui.js"></script>
+
+
 <body>
 <header>
   <div class="header-content">
@@ -884,7 +1225,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <button class="nav-tab tab" data-route="#/horario">Horario</button>
       <button class="nav-tab tab" data-route="#/notas">Notas</button>
       <button class="nav-tab tab" data-route="#/malla">Malla</button>
+      <button class="nav-tab tab" data-route="#/progreso">Progreso</button>
       <button class="nav-tab tab" data-route="#/calendario">Calendario</button>
+      <button class="nav-tab tab" data-route="#/asistencia">Asistencia</button>
+      <button class="nav-tab tab" data-route="#/party">Party</button> 
+      <button class="nav-tab tab" data-route="#/ayuda">Ayuda</button> 
+      <nav class="nav nav-tabs"> </nav>
     </nav>
 
     <!-- AUTH: hermano del nav, NO dentro del nav -->
@@ -893,19 +1239,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         Iniciar sesión con Google
       </button>
 
-      <div id="userBadge" class="user-badge hidden">
-        <div class="user-avatar" id="userAvatar">U</div>
-        <span id="userName">Usuario</span>
+      <div id="userBadge" class="user-badge hidden" style="gap: 8px; background: transparent; border: none; padding: 0;">
+  <button id="switchAccountBtn" class="btn btn-secondary" style="padding:0.4rem 0.8rem">
+    Cambiar de cuenta
+  </button>
+  <button id="signOutBtn" class="btn btn-secondary" style="padding:0.4rem 0.8rem">
+    Salir
+  </button>
+</div>
 
- <button id="switchAccountBtn" class="btn btn-secondary" style="padding:0.4rem 0.8rem">
-      Cambiar de cuenta
-    </button>
 
-
-        <button id="signOutBtn" class="btn btn-secondary" style="padding:0.4rem 0.8rem">
-          Salir
-        </button>
-      </div>
     </div>
   </div>
 </header>
@@ -929,7 +1272,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div class="profile-section">
     <div class="profile-avatar">
       <div id="pfAvatarCircle" class="avatar-circle" style="background-size:cover;background-position:center;">👨‍🎓</div>
-      <label id="pfAvatarBtn" for="pfAvatarFile" class="btn">Cambiar avatar</label>
+      <label id="pfAvatarBtn" for="pfAvatarFile" class="btn">Cambiar foto de pefil</label>
       <input id="pfAvatarFile" type="file" accept="image/*" class="sr-only" />
     </div>
 
@@ -999,22 +1342,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 <section id="page-semestres" class="page card hidden">
   <h2>📚 Semestres & Ramos</h2>
 
-  <!-- Party (ya lo tienes) -->
-  <div class="party-card">
-    <h3>🎯 Modo Colaborativo (Party)</h3>
-    <p class="muted">Crea una party y comparte el ID…</p>
-    <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
-      <button id="createPairBtn" class="btn">✨ Crear Party</button>
-      <button id="copyInviteBtn" class="btn btn-secondary" disabled>📋 Copiar ID</button>
-      <input id="joinCode" type="text" placeholder="Pegar ID de party"
-             style="flex:1;min-width:200px;background:rgba(255,255,255,.08);border:1px solid var(--border);padding:.7rem;border-radius:12px;color:white;">
-      <button id="joinByCodeBtn" class="btn btn-secondary">Unirse</button>
-      <button id="deletePairBtn" class="btn btn-secondary">Salir de party</button>
-    </div>
-    <div style="margin-top:1rem">
-      <b>ID actual:</b> <span id="pairId">—</span>
-    </div>
-  </div>
+  
 
   <!-- AVISO: falta universidad en Perfil -->
   <div id="semNoticeNoUni" class="muted" style="margin-top:1rem">
@@ -1075,6 +1403,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <input id="courseColor" type="color" value="#3B82F6">
       <small id="courseColorCode" class="muted">#3B82F6</small>
     </div>
+    <div class="form-field" style="grid-column:1 / -1;">
+  <label>
+    <input type="checkbox" id="courseAsistencia" />
+    Este ramo requiere asistencia
+  </label>
+</div>
   </div>
 
   <div style="display:flex;gap:.5rem;margin-bottom:1rem">
@@ -1107,6 +1441,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 </button>
 
   </div>
+
+<div class="export-bar">
+  <button id="btn-export-horario-png" class="ghost">Descargar imagen</button>
+  <button id="btn-export-horario-pdf" class="ghost">Descargar PDF</button>
+</div>
+
 
   <!-- Horario propio (schedule.js lo llena) -->
   <div id="horarioPropio"></div>
@@ -1212,17 +1552,21 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 <div class="card" style="margin-bottom:1rem;">
   <h3 style="margin-top:0">🧮 Cálculo de notas</h3>
 
-  <div class="form-grid">
-    <div class="form-field" style="grid-column:1 / -1;">
-      <label>Fórmula final</label>
-      <input id="gr-finalExpr" type="text"
-             placeholder='Ej: C1*100% + C2*50% + T1*50%' />
-      <small class="muted">
-        Usa +, −, ×, ÷, paréntesis y % (p. ej. 20% = 0.2). Los códigos son los que
-        defines en cada evaluación (C1, T1, P1…).
-      </small>
-    </div>
+<div class="form-grid">
+  <div class="form-field" style="grid-column:1 / -1;">
+    <label>Fórmula final</label>
+    <input id="gr-finalExpr" type="text"
+           placeholder='Ej: C1*100% + C2*50% + T1*50%' />
+    <small class="muted">
+      Usa +, −, ×, ÷, paréntesis y % (p. ej. 20% = 0.2).  
+      Los códigos son los que defines en cada evaluación (C1, T1, P1…).  
+      También puedes usar la <b>nota final de otros ramos</b> con:
+      <code>final("Nombre del ramo")</code> o  
+      <code>finalCode("Código del ramo")</code>.
+    </small>
   </div>
+</div>
+
 
   <div id="gr-rulesError" class="muted" style="color:#fca5a5;margin-top:.5rem"></div>
 
@@ -1254,10 +1598,38 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 </section>
 
     <!-- MALLA Section -->
+
+
     <section id="page-malla" class="page card hidden">
   <h2>🗺️ Malla Curricular</h2>
+       <div class="export-bar">
+  <button id="btn-export-malla-png" class="ghost">Descargar imagen</button>
+  <button id="btn-export-malla-pdf" class="ghost">Descargar PDF</button>
+</div>
   <div id="malla-host"></div>
+  
 </section>
+
+<!-- PROGRESO Section -->
+<section id="page-progreso" class="page card hidden">
+  <h2 style="margin-top:0">🏁 Progreso</h2>
+
+  <!-- 1) Avance global -->
+  <div id="prog-global" class="card" style="margin-top:12px">
+    <!-- progreso.js lo rellena -->
+  </div>
+
+  <!-- 2) Victorias del semestre (solo aprobados) -->
+  <div id="prog-semestre" class="card" style="margin-top:12px">
+    <!-- progreso.js lo rellena -->
+  </div>
+
+  <!-- 3) Progreso combinado con pareja (aparece solo si hay pareja) -->
+  <div id="prog-combinado" class="card hidden" style="margin-top:12px">
+    <!-- progreso.js lo rellena -->
+  </div>
+</section>
+
 
 
     <!-- CALENDARIO Section -->
@@ -1360,9 +1732,213 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         </div>
       </div>
     </section>
+
+    <!-- ASISTENCIA Section -->
+<section id="page-asistencia" class="page card hidden">
+  <h2>📋 Asistencia</h2>
+
+  <div class="form-field" style="margin-bottom:1rem;">
+    <label for="attCourseSel">Selecciona un ramo</label>
+    <select id="attCourseSel">
+      <option value="" disabled selected>Elige un ramo con asistencia…</option>
+    </select>
   </div>
 
+  <div id="asistenciaList" class="grades-container" style="margin-top:1rem;"></div>
+    <!-- attendance.js llenará aquí la lista de cursos con asistencia -->
+  </div>
+</section>
+  </div>
+  <div id="attModal" class="modal">
+  <div class="modal-content">
+    <h3>Agregar asistencia</h3>
+    <label>Selecciona fecha:</label>
+    <input type="date" id="attDate" style="margin-bottom:1rem;width:100%">
+
+    <div style="display:flex;gap:8px;justify-content:space-between;">
+      <button id="attPresente" class="btn">Presente</button>
+      <button id="attAusente" class="btn btn-secondary">Ausente</button>
+      <button id="attNoClass" class="btn btn-secondary">No hubo clase</button>
+    </div>
+
+    <div style="margin-top:1rem;text-align:right;">
+      <button id="attCancel" class="btn btn-secondary">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- PARTY Section -->
+<section id="page-party" class="page card hidden">
+  <h2>🎉 Party</h2>
+  <div class="party-card">
+    <h3>🎯 Modo Colaborativo (Party)</h3>
+    <p class="muted">Crea una party y comparte el ID…</p>
+    <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+      <button id="createPairBtn" class="btn">✨ Crear Party</button>
+      <button id="copyInviteBtn" class="btn btn-secondary" disabled>📋 Copiar ID</button>
+      <input id="joinCode" type="text" placeholder="Pegar ID de party"
+             style="flex:1;min-width:200px;background:rgba(255,255,255,.08);border:1px solid var(--border);padding:.7rem;border-radius:12px;color:white;">
+      <button id="joinByCodeBtn" class="btn btn-secondary">Unirse</button>
+      <button id="deletePairBtn" class="btn btn-secondary">Salir de party</button>
+    </div>
+    <div style="margin-top:1rem">
+      <b>ID actual:</b> <span id="pairId">—</span>
+    </div>
+  </div>
+</section>
+
+
   <script type="module" src="./js/main.js"></script>
+
+<!-- AYUDA Section -->
+<section id="page-ayuda" class="page card hidden">
+  <h2>🆘 Centro de Ayuda</h2>
+  <p class="muted">Aquí encontrarás todos los comandos y acciones que puedes usar en DuoPlanner, organizados por sección.</p>
+
+  <div class="help-container">
+
+    <!-- PERFIL -->
+<!-- PERFIL -->
+<details>
+  <summary>👤 Perfil</summary>
+  <div class="help-subsection">
+    <h4>Usuario</h4>
+    <ul>
+      <li>¿Cuál es mi nombre?</li>
+      <li>¿Cómo cambio mi nombre?</li>
+      <li>¿Cuál es mi cuenta de Google?</li>
+      <li>¿Cómo cambio mi cuenta de Google?</li>
+      <li>¿Cuál es mi fecha de nacimiento?</li>
+      <li>¿Cómo cambio mi fecha de nacimiento?</li>
+      <li>¿Cuántos años tengo?</li>
+      <li>¿Qué día estoy de cumpleaños?</li>
+      <li>¿Cuál es mi color favorito?</li>
+      <li>¿Cómo cambio mi color favorito?</li>
+      <li>¿Para qué se usa mi color favorito?</li>
+      <li>¿Cuál es mi universidad?</li>
+      <li>¿Cuántas universidades tiene la página?</li>
+      <li>¿Cómo cambio la universidad?</li>
+      <li>¿En qué carrera estoy?</li>
+      <li>¿Cuántas carreras tiene la universidad?</li>
+      <li>¿Cómo cambio mi carrera? (No testeada)</li>
+      <li>¿Qué cosas cambian al cambiar mi carrera?</li>
+      <li>¿Qué cosas cambian al cambiar mi universidad?</li>
+      <li>¿Cuál es mi correo universitario?</li>
+      <li>¿Cómo cambio mi correo universitario?</li>
+      <li>¿Cuál es mi teléfono?</li>
+      <li>¿Cómo cambio mi número de teléfono?</li>
+      <li>¿Cómo cambio mi avatar?</li>
+      <li>Si cambio mi carrera, ¿se modifica automáticamente la malla?</li>
+      <li>¿Puedo agregar una universidad que no está en la lista?</li>
+      <li>¿Qué pasa si aprieto “Cancelar”? ¿Se borran mis datos?</li>
+      <li>¿Cómo sé que los cambios quedaron guardados?</li>
+      <li>¿Mis datos de perfil se sincronizan en la nube o solo en este dispositivo?</li>
+      <li>Si cierro sesión, ¿pierdo mis datos de perfil?</li>
+    </ul>
+
+    <h4>Duo</h4>
+    <ul>
+      <li>¿Cuál es el nombre de mi Duo?</li>
+      <li>¿Cuál es la fecha de nacimiento de mi Duo?</li>
+      <li>¿Qué día está de cumpleaños mi Duo?</li>
+      <li>¿Cuántos años tiene mi Duo?</li>
+      <li>¿Cuál es el color favorito de mi Duo?</li>
+      <li>¿Cuál es la universidad de mi Duo?</li>
+      <li>¿Cuál es la carrera de mi Duo?</li>
+      <li>¿Cuál es el correo de mi Duo? (solo correo universitario, no el de Google)</li>
+      <li>¿Cuál es el teléfono de mi Duo?</li>
+    </ul>
+
+    <h4>Acciones</h4>
+    <ul>
+      <li>El bot te puede cambiar el nombre si lo solicitas.</li>
+      <li>El bot te puede cerrar la sesión si lo solicitas.</li>
+      <li>El bot te puede mostrar la opción para cambiar de cuenta.</li>
+      <li>El bot te puede cambiar la fecha de nacimiento si lo solicitas.</li>
+      <li>El bot te puede cambiar el color favorito si lo solicitas.</li>
+      <li>El bot te puede cambiar la universidad si lo solicitas.</li>
+      <li>El bot te puede cambiar la carrera si lo solicitas.</li>
+      <li>El bot te puede cambiar el correo universitario si lo solicitas.</li>
+      <li>El bot te puede cambiar el número de teléfono si lo solicitas.</li>
+      <li>El bot te puede borrar todos los datos de perfil si lo solicitas.</li>
+      <li>El bot te puede ayudar a cambiar el avatar si lo solicitas.</li>
+    </ul>
+  </div>
+</details>
+
+
+
+<!-- SEMESTRES -->
+<details>
+  <summary>📚 Semestres</summary>
+  <div class="help-subsection">
+    <h4>Usuario</h4>
+    <ul>
+      <li>¿Cuántos ramos estoy tomando este semestre?</li>
+      <li>¿Qué ramos tomé el semestre XXXX-X?</li>
+      <li>¿Cuál es mi semestre actual?</li>
+      <li>¿Qué ramo tiene asistencia obligatoria?</li>
+      <li>¿El ramo <b>X</b> tiene asistencia obligatoria o marcada?</li>
+      <li>¿Qué ramos tengo este semestre?</li>
+      <li>¿Cuántos semestres hay registrados?</li>
+      <li>¿Cómo se llama el profesor o la profesora de <b>X</b> (ramo)?</li>
+      <li>¿Cuál es el código de <b>X</b> (ramo)?</li>
+      <li>¿Cuál es el paralelo de <b>X</b> (ramo)?</li>
+      <li>¿Cuál es el color de <b>X</b> (ramo)?</li>
+    </ul>
+
+    <h4>Duo</h4>
+    <ul>
+      <li>¿Cuántos ramos está tomando mi Duo este semestre?</li>
+      <li>¿Qué ramo de mi Duo tiene asistencia obligatoria?</li>
+      <li>¿Cuántos semestres tiene mi Duo registrados?</li>
+    </ul>
+  </div>
+</details>
+
+
+    <!-- NOTAS -->
+    <details>
+      <summary>📊 Notas</summary>
+      <div class="help-subsection">
+        <ul>
+          <li><code>/agregarevaluacion</code> → Añade una nueva evaluación al ramo actual.</li>
+          <li><code>/modificarnota</code> → Edita la nota de una evaluación.</li>
+          <li><code>/simularnota</code> → Abre el simulador de notas.</li>
+          <li><code>/vernotas</code> → Muestra tus promedios y estados.</li>
+        </ul>
+      </div>
+    </details>
+
+    <!-- MALLA -->
+    <details>
+      <summary>🗺️ Malla</summary>
+      <div class="help-subsection">
+        <ul>
+          <li><code>/vermalla</code> → Muestra la malla completa de tu carrera.</li>
+          <li><code>/exportarmalla</code> → Descarga la malla como imagen o PDF.</li>
+          <li><code>/buscarramo [código]</code> → Encuentra un ramo específico.</li>
+        </ul>
+      </div>
+    </details>
+
+    <!-- PARTY -->
+    <details>
+      <summary>🎉 Party</summary>
+      <div class="help-subsection">
+        <ul>
+          <li><code>/crearparty</code> → Crea una nueva party colaborativa.</li>
+          <li><code>/unirparty [ID]</code> → Únete a una party existente.</li>
+          <li><code>/salirparty</code> → Sal de la party actual.</li>
+          <li><code>/verparty</code> → Muestra los miembros de tu party.</li>
+        </ul>
+      </div>
+    </details>
+
+  </div>
+</section>
+
 
 </body>
 </html>
