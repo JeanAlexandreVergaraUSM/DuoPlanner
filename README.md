@@ -147,15 +147,9 @@ El objetivo principal del sistema es **centralizar toda la información universi
 
 Proyecto desarrollado por **Jean Alexandre Vergara**  
 Universidad Técnica Federico Santa María  
-📧 [jean.vergara@usm.cl](mailto:jean.vergara@usm.cl)
+📧 [jean.vergara@usm.cl](mailto:jean.alexandre@usm.cl)
 
 ---
 
-## 📄 Licencia
-
-Este proyecto se distribuye bajo la licencia **MIT**.  
-Eres libre de usarlo, modificarlo y compartirlo con fines educativos y no comerciales.
-
----
 
 ⭐ *Si te gustó el proyecto, considera dejar una estrella en GitHub :)*
