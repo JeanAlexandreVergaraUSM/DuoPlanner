@@ -35,17 +35,18 @@ export function setActiveTab(route) {
   const pfBar = document.getElementById('pfActions');
 if (pfBar) pfBar.classList.toggle('hidden', r !== '#/perfil');
 
-  // Tabs activos/inactivos
   navTabs.forEach(t => t.classList.toggle('active', t.dataset.route === r));
 
-  // Ocultar todas las páginas (si existen)
   Object.values(pages).forEach(p => p && p.classList.add('hidden'));
 
-  // Mostrar la correcta (si existe)
   if (r === '#/perfil'     && pages.perfil)     pages.perfil.classList.remove('hidden');
   if (r === '#/semestres'  && pages.semestres)  pages.semestres.classList.remove('hidden');
   if (r === '#/horario'    && pages.horario)    pages.horario.classList.remove('hidden');
-  if (r === '#/notas'      && pages.notas)      pages.notas.classList.remove('hidden');
+  if (r === '#/notas' && pages.notas) {
+  pages.notas.classList.remove('hidden');
+  document.dispatchEvent(new Event('route:notas')); 
+}
+
   if (r === '#/malla'      && pages.malla)      pages.malla.classList.remove('hidden');
   if (r === '#/progreso'   && pages.progreso)   pages.progreso.classList.remove('hidden');
   if (r === '#/calendario' && pages.calendario) {
@@ -60,12 +61,10 @@ if (r === '#/ayuda' && pages.ayuda) pages.ayuda.classList.remove('hidden'); // �
 
 
 
-  // Aviso general por si otros módulos necesitan saber
   document.dispatchEvent(new CustomEvent('route:change', { detail: { route: r } }));
 }
 
 export function initRouter() {
-  // Resolver nodos AQUÍ (cuando ya está el DOM)
   pages = {
   perfil: $('page-perfil'),
   semestres: $('page-semestres'),
@@ -82,12 +81,9 @@ export function initRouter() {
 
   navTabs = Array.from(document.querySelectorAll('.tab[data-route]')) || [];
 
-  // Click en tabs
   navTabs.forEach(t => t.addEventListener('click', () => navigate(t.dataset.route)));
 
-  // Cambios de hash
   window.addEventListener('hashchange', () => setActiveTab(location.hash));
 
-  // Primera activación
   setActiveTab(location.hash || '#/perfil');
 }

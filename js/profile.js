@@ -515,8 +515,8 @@ function formatDateDMY(iso){
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
-/* ================= Partner card ================= */
-export function mountPartnerProfileCard(){
+// ================= Partner card =================
+export function mountPartnerProfileCard() {
   const hostPage = $('page-perfil');
   if (!hostPage) return;
 
@@ -533,21 +533,26 @@ export function mountPartnerProfileCard(){
       <div id="pp-uni"><b>Universidad:</b> —</div>
       <div id="pp-career"><b>Carrera:</b> —</div>
       <div id="pp-bday" class="muted"><b>Nacimiento:</b> —</div>
-      <div id="pp-color"><b>Color favorito:</b> <span id="pp-color-swatch"
-        style="display:inline-block;width:16px;height:16px;border-radius:4px;vertical-align:middle;margin:0 6px;background:#ff69b4;border:1px solid rgba(255,255,255,.25)"></span>
-        <span id="pp-color-code">—</span></div>
+      <div id="pp-color"><b>Color favorito:</b>
+        <span id="pp-color-swatch"
+          style="display:inline-block;width:16px;height:16px;border-radius:4px;vertical-align:middle;margin:0 6px;background:#ff69b4;border:1px solid rgba(255,255,255,.25)">
+        </span>
+        <span id="pp-color-code">—</span>
+      </div>
       <div id="pp-email"><b>Email universitario:</b> —</div>
       <div id="pp-phone"><b>Teléfono:</b> —</div>
     `;
-    card.classList.add('hidden'); 
+    card.classList.add('hidden');
     hostPage.appendChild(card);
   }
 
   const clearUI = () => {
-    $('pp-name').innerHTML   = `<b>Nombre:</b> —`;
-    $('pp-uni').innerHTML    = `<b>Universidad:</b> —`;
+    $('pp-name').innerHTML = `<b>Nombre:</b> —`;
+    $('pp-uni').innerHTML = `<b>Universidad:</b> —`;
     $('pp-career').innerHTML = `<b>Carrera:</b> —`;
-    $('pp-bday').innerHTML   = `<b>Fecha de nacimiento:</b> —`;
+    $('pp-bday').innerHTML = `<b>Fecha de nacimiento:</b> —`;
+    $('pp-email').innerHTML = `<b>Email universitario:</b> —`;
+    $('pp-phone').innerHTML = `<b>Teléfono:</b> —`;
     $('pp-color-code').textContent = '—';
     const sw = $('pp-color-swatch');
     if (sw) {
@@ -559,66 +564,79 @@ export function mountPartnerProfileCard(){
   if (unsubPartner) { unsubPartner(); unsubPartner = null; }
 
   if (!state.pairOtherUid) {
-  clearUI();
-  if (unsubPartner) { unsubPartner(); unsubPartner = null; } // corta escucha si existía
-  if (card) card.classList.add('hidden');                    // ⬅️ oculta el card
-  return;
-}
-
-
-  const ref = doc(db,'users', state.pairOtherUid);
-  card.classList.remove('hidden'); // ⬅️ mostrar el card
-
-
-  function prettyDMY(iso){
-    if (!iso) return '—';
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-    if (!m) return iso;
-    return `${m[3]}/${m[2]}/${m[1]}`;
+    clearUI();
+    if (card) card.classList.add('hidden');
+    return;
   }
 
-  unsubPartner = onSnapshot(ref, (snap)=>{
-    if (card) card.classList.remove('hidden');
-    const d = snap.data() || {};
+  const refRoot = doc(db, 'users', state.pairOtherUid);
+  const refProf = doc(db, 'users', state.pairOtherUid, 'profile', 'profile');
+  card.classList.remove('hidden');
+
+  let latestRoot = null, latestProf = null;
+
+  const mergeAndRender = () => {
+    const d = { ...(latestRoot?.data() || {}), ...(latestProf?.data() || {}) };
     const pav = $('pp-avatar');
-    if (pav){
+    if (pav) {
       if (d.avatarData) {
-  pav.style.backgroundImage = `url("${d.avatarData}")`;
-  pav.textContent = "";
-} else {
-  pav.style.backgroundImage = "none";
-  pav.textContent = "👨‍🎓"; // emoji por defecto
-  pav.style.display = "flex";
-  pav.style.alignItems = "center";
-  pav.style.justifyContent = "center";
-  pav.style.fontSize = "2rem";
-}
-
-
-
+        pav.style.backgroundImage = `url("${d.avatarData}")`;
+        pav.textContent = '';
+      } else {
+        pav.style.backgroundImage = 'none';
+        pav.textContent = '👨‍🎓';
+        pav.style.display = 'flex';
+        pav.style.alignItems = 'center';
+        pav.style.justifyContent = 'center';
+        pav.style.fontSize = '2rem';
+      }
     }
 
-    $('pp-name').innerHTML   = `<b>Nombre:</b> ${d.name || '—'}`;
-    $('pp-uni').innerHTML    = `<b>Universidad:</b> ${readUni(d)}`;
-    $('pp-career').innerHTML = `<b>Carrera:</b> ${d.career ? (d.career==='ICTEL'?'Ing. Civil Telemática':'Medicina Veterinaria') : '—'}`;
-    $('pp-bday').innerHTML   = `<b>Fecha de nacimiento:</b> ${prettyDMY(d.birthday)}`;
-    $('pp-email').innerHTML  = `<b>Email universitario:</b> ${d.emailUniversity || '—'}`;
-    $('pp-phone').innerHTML  = `<b>Teléfono:</b> ${d.phone || '—'}`;
+    $('pp-name').innerHTML = `<b>Nombre:</b> ${d.name || '—'}`;
+    $('pp-uni').innerHTML = `<b>Universidad:</b> ${readUni(d)}`;
+    $('pp-career').innerHTML = `<b>Carrera:</b> ${
+      d.career ? (d.career === 'ICTEL' ? 'Ing. Civil Telemática' : 'Medicina Veterinaria') : '—'
+    }`;
+    $('pp-bday').innerHTML = `<b>Fecha de nacimiento:</b> ${prettyDMY(d.birthday)}`;
+    $('pp-email').innerHTML = `<b>Email universitario:</b> ${d.uniEmail || '—'}`;
+    $('pp-phone').innerHTML = `<b>Teléfono:</b> ${d.phone || '—'}`;
 
-    const col = (typeof d.favoriteColor === 'string' && /^#[0-9A-Fa-f]{6}$/.test(d.favoriteColor))
-      ? d.favoriteColor : '#ff69b4';
-    const sw = $('pp-color-swatch'); if (sw) sw.style.background = col;
-    const cc = $('pp-color-code'); if (cc) cc.textContent = col.toUpperCase();
+    const col =
+      typeof d.favoriteColor === 'string' && /^#[0-9A-Fa-f]{6}$/.test(d.favoriteColor)
+        ? d.favoriteColor
+        : '#ff69b4';
+    const sw = $('pp-color-swatch');
+    if (sw) sw.style.background = col;
+    const cc = $('pp-color-code');
+    if (cc) cc.textContent = col.toUpperCase();
+  };
+
+  const prettyDMY = (iso) => {
+    if (!iso) return '—';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  };
+
+  const readUni = (d) => {
+    if (!d?.university) return '—';
+    if (d.university === 'UMAYOR') return 'Universidad Mayor';
+    if (d.university === 'USM') return 'UTFSM';
+    if (d.university === 'OTRA') return d.customUniversity || 'Otra';
+    return d.university;
+  };
+
+  const unsubRoot = onSnapshot(refRoot, (snap) => {
+    latestRoot = snap;
+    mergeAndRender();
+  });
+  const unsubProf = onSnapshot(refProf, (snap) => {
+    latestProf = snap;
+    mergeAndRender();
   });
 
-  function readUni(d){
-    if (!d?.university) return '—';
-    if (d.university==='UMAYOR') return 'Universidad Mayor';
-    if (d.university==='USM')    return 'UTFSM';
-    if (d.university==='OTRA')   return d.customUniversity || 'Otra';
-    return d.university;
-  }
+  unsubPartner = () => { unsubRoot(); unsubProf(); };
 }
+
 
 document.addEventListener('pair:ready', () => {
   mountPartnerProfileCard();

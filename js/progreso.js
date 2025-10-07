@@ -1,7 +1,47 @@
-// js/progreso.js
+  // js/progreso.js
 import { db } from './firebase.js';
 import { $, state } from './state.js';
 import { doc, onSnapshot, collection, getDocs, query, getDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+// ===== Helper seguro de evaluación =====
+function safeEvalExpr(expr, vars = {}, fns = {}) {
+  if (!expr) return NaN;
+  const normalized = String(expr).trim()
+    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/,/g, '.').replace(/\s+/g, ' ');
+
+  // Permitir funciones conocidas
+  const builtinFns = new Set(['avg','min','max','final','finalCode','finalId']);
+  const jsWords = new Set(['NaN','Infinity','Math','true','false']);
+
+  // Enmascarar strings
+  const masked = normalized.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '0');
+
+  // Validar caracteres
+  if (!/^[\w\s\.\+\-\*\/\(\),%<>!=]+$/.test(masked))
+    throw new Error('Fórmula contiene caracteres no permitidos.');
+
+  // Reemplazar porcentajes
+  const exprPrepared = normalized.replace(/(\d+(?:\.\d+)?)\s*%/g, (_, n) => `(${n}/100)`);
+
+  // Variables y funciones
+  const keys = Object.keys(vars);
+  const vals = keys.map(k => vars[k] ?? 0);
+
+  const ids = (masked.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) || []);
+  const have = new Set([...keys, ...Object.keys(fns)]);
+  for (const id of ids) {
+    if (builtinFns.has(id) || jsWords.has(id)) continue;
+    if (!have.has(id)) { keys.push(id); vals.push(0); have.add(id); }
+  }
+
+  const fnNames = Object.keys(fns);
+  const fnVals  = Object.values(fns);
+
+  // eslint-disable-next-line no-new-func
+  return Function(...fnNames, ...keys, `"use strict"; return (${exprPrepared});`)(...fnVals, ...vals);
+}
+
 
 /* ================= Data loaders (re-uso de malla) ================= */
 const ALL_ROMANS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
@@ -104,6 +144,7 @@ export async function refreshProgreso(){
   const host1 = $('prog-global');
   const host2 = $('prog-semestre');
   const host3 = $('prog-combinado');
+  if (host2) host2.style.display = 'none';
   if (!host1 || !host2 || !host3) return;
 
   // Si aún no hay carrera, mostrar placeholders amables y salir
@@ -133,7 +174,7 @@ export async function refreshProgreso(){
     <div class="progress-outer"><div class="progress-inner" style="width:${myPct}%;"></div></div>
     <div class="muted" id="prog-phrase" style="margin-top:6px"></div>
   `;
-
+/*
   // 2) Victorias del semestre (solo aprobados)
   host2.innerHTML = `<h3 style="margin:0 0 8px">🎯 Victorias del semestre</h3><div class="muted">Cargando…</div>`;
   const approvedList = await getApprovedCoursesInActiveSemester();
@@ -150,7 +191,7 @@ export async function refreshProgreso(){
   const phrase = fraseEsperanza(myPct, approvedList.length);
   const phraseEl = $('prog-phrase'); 
   if (phraseEl) phraseEl.textContent = phrase;
-
+*/
   // 3) Progreso combinado (si hay pareja)
   if (unsubPartnerMalla){ unsubPartnerMalla(); unsubPartnerMalla = null; }
 
@@ -204,24 +245,205 @@ export async function refreshProgreso(){
 }
 
 
-/* ====== Firestore helpers: cursos aprobados del semestre activo ====== */
-async function getApprovedCoursesInActiveSemester(){
+async function getApprovedCoursesInActiveSemester() {
   if (!state.currentUser || !state.activeSemesterId) return [];
-  const ref = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'courses');
+
+  const ref = collection(
+    db, 'users',
+    state.currentUser.uid,
+    'semesters', state.activeSemesterId,
+    'courses'
+  );
   const snap = await getDocs(query(ref));
-  const names = [];
-  snap.forEach(d => {
-    const c = d.data() || {};
-    // Estrategias posibles para marcar aprobado:
-    // 1) c.status === 'Aprobado'
-    // 2) c.final >= threshold (si existiera)
-    // 3) c.passed === true
-    const st = (c.status || '').toLowerCase();
-    const passed = st.includes('aprob') || c.passed === true;
-    if (passed && (c.name || c.code)) names.push(c.name || c.code);
-  });
-  return names.sort((a,b)=> a.localeCompare(b));
+
+    const allCourses = [];
+  const finalsByCode = {};
+
+  console.log('🟦 [Progreso] Leyendo cursos del semestre...');
+  for (const docSnap of snap.docs) {
+    const c = docSnap.data() || {};
+    const courseId = docSnap.id;
+    const metaRef = doc(db, 'users', state.currentUser.uid,
+      'semesters', state.activeSemesterId, 'courses', courseId, 'grading', 'meta');
+    const metaSnap = await getDoc(metaRef);
+    const meta = metaSnap.exists() ? metaSnap.data() : { scale: 'USM', finalExpr: '', rulesText: '' };
+
+    const compsRef = collection(metaRef, 'components');
+    const compsSnap = await getDocs(compsRef);
+    const comps = compsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    const vals = {};
+    comps.forEach(k => {
+      if (typeof k.score === 'number' && isFinite(k.score)) vals[k.key] = k.score;
+    });
+
+    // asistencia
+    const attRef = collection(db, 'users', state.currentUser.uid,
+      'semesters', state.activeSemesterId, 'courses', courseId, 'attendance');
+    const attSnap = await getDocs(attRef);
+    const attDays = attSnap.docs.map(d => d.data());
+    const validDays = attDays.filter(d => !d.noClass);
+    const presentDays = validDays.filter(d => d.present || d.justified).length;
+    vals.Asistencia = validDays.length ? (presentDays / validDays.length) * 100 : 0;
+
+    // calcular nota final (igual que antes, con tus fallbacks)
+    let final = null;
+    try {
+      if ((meta.finalExpr || '').trim()) {
+        final = safeEvalExpr(meta.finalExpr, vals, { avg, min: Math.min, max: Math.max });
+      }
+    } catch (_) {}
+    if (final == null) {
+      const nf = comps.find(k => /^(nf|final|nota[_ ]?final|examen[_ ]?final)$/i.test(String(k.key||k.name||'')));
+      if (nf && typeof nf.score === 'number' && isFinite(nf.score)) final = nf.score;
+    }
+    if (final == null) {
+      const xs = comps.map(k => k.score).filter(v => typeof v === 'number' && isFinite(v));
+      if (xs.length) final = xs.reduce((a,b)=>a+b,0) / xs.length;
+    }
+    if (typeof final === 'number' && isFinite(final)) final = truncate(final, meta.scale);
+    else final = null;
+
+    allCourses.push({ docSnap, meta, vals, final, scale: meta.scale, code: c.code, name: c.name });
+  }
+
+  // ✅ ahora que TODOS los finales están listos, construimos finalsByCode
+  for (const { code, name, final } of allCourses) {
+    const rawCode = (code || '').toLowerCase();
+    const aliases = new Set([
+      rawCode,
+      rawCode.replace(/\s+/g, ''),
+      rawCode.replace(/-/g,'').replace(/\s+/g,''),
+      rawCode.split('-')[0]?.trim(),
+    ].filter(Boolean));
+
+    for (const a of aliases) finalsByCode[a] = final;
+    if (name) finalsByCode[name.toLowerCase()] = final;
+  }
+
+  console.log('📘 Finals detectados:', finalsByCode);
+
+
+  function avg(...xs) {
+  const arr = Array.isArray(xs[0]) ? xs[0] : xs;
+  if (!arr.length) return NaN;
+  let n = 0, s = 0;
+  for (const v of arr) {
+    if (typeof v === 'number' && isFinite(v)) { s += v; n++; }
+  }
+  return n ? (s / n) : NaN;
 }
+
+  // --- Segunda pasada ---
+  const names = [];
+  for (const { docSnap, meta, vals, final, scale, code, codigo, name } of allCourses) {
+    const thr = scale === 'MAYOR' ? 3.95 : 55;
+    let passed = false;
+
+    const st = (docSnap.data().status || '').toLowerCase();
+    if (st.includes('aprob') || docSnap.data().passed === true) passed = true;
+
+    let rulesOk = true;
+    const rulesText = (meta.rulesText || '').trim();
+    if (rulesText) {
+      const lines = rulesText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      for (const rule of lines) {
+        try {
+          const parsed = rule.match(/^(.*?)(>=|<=|==|!=|>|<)(.*)$/);
+          if (!parsed) continue;
+          const [, left, op, right] = parsed;
+
+  const fns = {
+  finalCode: (c) => {
+  // Convertir a string limpio
+  const str = String(c || '').trim().replace(/^["']|["']$/g, '').toLowerCase();
+  if (!str) return NaN;
+
+  // Posibles alias seguros
+  const variants = new Set([
+    str,                                 // lab-140
+    str.replace(/\s+/g, ''),             // lab-140 sin espacios
+    str.replace(/-/g, ''),               // lab140
+    str.toUpperCase(),                   // LAB-140
+  ]);
+
+  for (const key of variants) {
+    if (key in finalsByCode && typeof finalsByCode[key] === 'number') {
+      console.log(`⚙️  finalCode("${c}") =>`, finalsByCode[key]);
+      return finalsByCode[key];
+    }
+  }
+
+  console.log(`⚙️  finalCode("${c}") => NaN`);
+  return NaN;
+},
+
+
+
+  avg,
+  min: Math.min,
+  max: Math.max,
+};
+
+
+
+          const lv = safeEvalExpr(left.replace(/%/g, ''), vals, fns);
+          const rv = safeEvalExpr(right.replace(/%/g, ''), vals, fns);
+          const ok = compare(lv, op, rv);
+          if (!ok) {
+            rulesOk = false;
+            console.warn(`❌ Regla fallida en ${name || code}: ${left}${op}${right} (→ ${lv} ${op} ${rv})`);
+          }
+        } catch (err) {
+          console.error(`❗ Error evaluando regla en ${name || code}:`, err);
+          rulesOk = false;
+        }
+      }
+    }
+
+    const passedByGrade = final != null && final >= thr;
+    if ((passedByGrade && rulesOk) || passed) {
+      console.log(`✅ ${name || code} aprobado (nota=${final}, reglas=${rulesOk})`);
+      names.push(name || code);
+    } else {
+      console.log(`🔴 ${name || code} no aprobado (nota=${final}, reglas=${rulesOk})`);
+    }
+  }
+
+  console.log('🏁 Lista final de aprobados:', names);
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+
+
+
+// Helper de comparación
+function compare(a, op, b) {
+  if (!(isFinite(a) && isFinite(b))) return false;
+  switch (op) {
+    case '>=': return a >= b;
+    case '<=': return a <= b;
+    case '>': return a > b;
+    case '<': return a < b;
+    case '==': return a === b;
+    case '!=': return a !== b;
+    default: return false;
+  }
+}
+
+
+// === Helper para truncar notas según la escala ===
+function truncate(val, scale) {
+  if (val == null || isNaN(val)) return null;
+  if (scale === 'MAYOR') {
+    return Math.trunc(val * 100) / 100;  // 2 decimales
+  } else {
+    return Math.trunc(val * 10) / 10;    // 1 decimal
+  }
+}
+
+
+
 
 /* ============ Mini estilos inyectados para barra ============ */
 (function injectStyles(){

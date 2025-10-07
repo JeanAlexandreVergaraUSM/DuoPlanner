@@ -50,6 +50,27 @@ export function initGrades(){
   bindUi();
 }
 
+// 🔹 Espera un poco tras volver a la pestaña de Notas, para limpiar bien la UI
+document.addEventListener('route:notas', () => {
+  setTimeout(() => {
+    const sel = $('gr-courseSel');
+    const evalsCard = $('gr-evalsCard');
+    const calcCard = $('gr-calcCard');
+    const summaryCard = $('gr-summaryCard');
+    const rulesCard = $('gr-rulesCard');
+
+    // Si no hay curso elegido, limpia y oculta todo
+    if (!sel || !sel.value) {
+      if (evalsCard) evalsCard.classList.add('hidden');
+      if (calcCard) calcCard.classList.add('hidden');
+      if (summaryCard) summaryCard.classList.add('hidden');
+      if (rulesCard) rulesCard.classList.add('hidden');
+    }
+  }, 50); // ⏱️ 50ms bastan
+});
+
+
+
 export function onCoursesChanged(){
   loadCoursesIntoSelect();
 }
@@ -192,7 +213,7 @@ function ensureRulesUI(){
   card.innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:center">
       <h3 style="margin:0">Reglas</h3>
-      <div class="muted" id="gr-rulesHint">Una por línea. Ej.: <code>C1>=50</code>, <code>avg(Q1,Q2,Q3)>=60</code></div>
+      <div class="muted" id="gr-rulesHint">Una por línea. Ej.: <code>C1>=50</code>, <code>avg(Q1,Q2,Q3)>=60</code>,</code> finalCode("Codigo del ramo") >= 50</code>,</code>Asistencia >= 55%</code></div>
     </div>
     <div class="row" style="align-items:flex-start;margin-top:8px">
       <textarea id="gr-rulesText" rows="4" style="flex:1 1 520px;min-height:86px;background:#0e1120;border:1px solid var(--line);color:var(--ink);padding:8px 10px;border-radius:10px"></textarea>
@@ -239,6 +260,7 @@ async function loadCoursesIntoSelect(){
   });
   currentCourseId = null;
 sel.value = "";
+sel.selectedIndex = 0;
 state.editingCourseId = null;
 
 // Oculta secciones hasta que elijas
@@ -254,15 +276,18 @@ async function onCourseChange(e){
   state.editingCourseId = currentCourseId; 
 
   if (!currentCourseId){
-    $('gr-evalsCard')?.classList.add('hidden');
-    $('gr-calcCard')?.classList.add('hidden');
-    $('gr-summaryCard')?.classList.add('hidden');
-    return;
-  }
+  $('gr-evalsCard')?.classList.add('hidden');
+  $('gr-calcCard')?.classList.add('hidden');
+  $('gr-summaryCard')?.classList.add('hidden');
+  $('gr-rulesCard')?.classList.add('hidden');
+  return;
+}
 
   $('gr-evalsCard')?.classList.remove('hidden');
   $('gr-calcCard')?.classList.remove('hidden');
   $('gr-summaryCard')?.classList.remove('hidden');
+  $('gr-rulesCard')?.classList.remove('hidden');
+
 
   await loadGradingDoc();
   await watchComponents();
@@ -577,6 +602,14 @@ function computeAndRender(){
     }
   });
 
+  // 🔹 Añadir variable Asistencia al contexto de cálculo
+if (window.courseAttendance && currentCourseId in window.courseAttendance) {
+  values.Asistencia = window.courseAttendance[currentCourseId];
+} else {
+  values.Asistencia = 0;
+}
+
+
   // Nota final
 let final = null;
 let lastErr = '';
@@ -614,13 +647,21 @@ $('gr-rulesStatus') && ( $('gr-rulesStatus').dataset.formulaError = lastErr );
   const rules = parseRules(header.rulesText || '');
   const rulesEval = evaluateRules(rules, values);
 
-  // Estado: requiere pasar umbral y cumplir todas las reglas
-  let status = null;
-  if (final==null){
-    status = null;
+ // ✅ Estado: se refleja aunque no existan notas si las reglas fallan
+let status = null;
+
+if (final == null) {
+  // No hay nota final, pero revisamos las reglas
+  if (rulesEval.allOk) {
+    status = '—'; // sin nota y reglas ok
   } else {
-    status = (final >= thr && rulesEval.allOk) ? 'Aprueba' : 'Reprueba';
+    status = 'Reprueba'; // incumple reglas (ej. asistencia baja)
   }
+} else {
+  // Hay nota final → debe cumplir nota + reglas
+  status = (final >= thr && rulesEval.allOk) ? 'Aprueba' : 'Reprueba';
+}
+
 
   // Necesitas
   let needed = '—';
@@ -741,8 +782,22 @@ function evaluateRules(lines, vars, fns){
       const baseFns = { avg, min: Math.min, max: Math.max,
         final: lookupFinalByName, finalCode: lookupFinalByCode, finalId: lookupFinalById };
       const useFns = { ...baseFns, ...(fns || {}) };
-      lv = safeEvalExpr(left,  vars, useFns);
-      rv = safeEvalExpr(right, vars, useFns);
+
+// 🔹 Asegurar que Asistencia esté disponible también dentro de las reglas
+if (window.courseAttendance && currentCourseId in window.courseAttendance) {
+  vars.Asistencia = window.courseAttendance[currentCourseId];
+} else if (!('Asistencia' in vars)) {
+  vars.Asistencia = 0;
+}
+
+// Permitir expresiones con "%", ej. "Asistencia >= 55%"
+const cleanLeft  = left.replace(/%/g, '');
+const cleanRight = right.replace(/%/g, '');
+
+
+     lv = safeEvalExpr(cleanLeft,  vars, useFns);
+rv = safeEvalExpr(cleanRight, vars, useFns);
+
 
       ok = compare(lv, op, rv);
     }catch{
@@ -1805,3 +1860,53 @@ export async function bestWorst(semId) {
   results.sort((a,b)=> (b.promedio||0) - (a.promedio||0));
   return { best: results[0], worst: results[results.length-1] };
 }
+
+// 🧹 Reinicio TOTAL del módulo Notas al salir o volver (manteniendo los ramos)
+document.addEventListener('route:change', (e) => {
+  const route = e.detail?.route || '';
+  const sel = document.getElementById('gr-courseSel');
+
+  function resetNotasUI() {
+    // 🔸 Reestablecer selección al placeholder, sin borrar la lista
+    if (sel) {
+      sel.value = '';
+      if (sel.querySelector('option[value=""]')) {
+        sel.selectedIndex = 0;
+      } else {
+        // Si no tiene placeholder, lo insertamos al inicio
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Selecciona un ramo…';
+        opt.disabled = true;
+        opt.selected = true;
+        sel.insertBefore(opt, sel.firstChild);
+        sel.selectedIndex = 0;
+      }
+    }
+
+    // 🔸 Reset de variables globales
+    window.currentCourseId = null;
+    if (window.state) window.state.editingCourseId = null;
+
+    // 🔸 Limpieza de elementos de texto
+    const setText = (id, txt = '—') => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = txt;
+    };
+    setText('gr-currentAvg');
+    setText('gr-neededToPass');
+    setText('gr-status');
+
+    // 🔸 Limpieza de listas
+    const list = document.getElementById('gr-evalsList');
+    if (list) list.innerHTML = '<div class="muted">Selecciona un ramo.</div>';
+
+    // 🔸 Ocultar tarjetas de notas
+    ['gr-evalsCard', 'gr-calcCard', 'gr-summaryCard', 'gr-rulesCard']
+      .forEach(id => document.getElementById(id)?.classList.add('hidden'));
+  }
+
+  // ⚙️ Al salir o volver a la pestaña "Notas"
+  if (route !== '#/notas') resetNotasUI();
+  if (route === '#/notas') setTimeout(resetNotasUI, 120);
+});

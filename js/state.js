@@ -10,10 +10,10 @@ export const state = {
   unsubscribeCourses: null,
   editingCourseId: null,
 
-  // UID de la pareja (no tú)
+  // UID de la pareja 
   pairOtherUid: null,
 
-  // Estado para vistas compartidas (horario / notas / malla / calendario)
+  // Estado para vistas compartidas 
   shared: {
     horario:  { semId: null },
     notas:    { semId: null},
@@ -21,7 +21,6 @@ export const state = {
     calendar: { semId: null }
   },
 
-  // Debug: localhost con ?debug o bandera global window.duoplannerDebug
   DEBUG:
     (location.hostname === 'localhost' || location.hostname === '127.0.0.1') &&
     (new URLSearchParams(location.search).has('debug') || (window?.duoplannerDebug ?? false)),

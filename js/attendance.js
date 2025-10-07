@@ -12,7 +12,6 @@ export function initAttendance(){
   unsubAttendance = onSnapshot(ref, snap => {
     const asistCourses = snap.docs.filter(d => d.data().asistencia);
 
-    // Llenar selector
     const sel = $('attCourseSel');
     if (sel){
       sel.innerHTML = '<option value="" disabled selected>Elige un ramo…</option>';
@@ -21,7 +20,6 @@ export function initAttendance(){
       });
     }
 
-    // cuando cambie el selector, renderiza
     sel?.addEventListener('change', ()=>{
       const courseId = sel.value;
       const match = asistCourses.find(d=>d.id === courseId);
@@ -50,7 +48,6 @@ function renderAttendance(list){
     loadAttendance(docSnap.id);
   });
 
-  // evento para botones "Agregar asistencia"
   host.querySelectorAll('.add-att-btn').forEach(btn=>{
     btn.addEventListener('click', ()=> openAttendanceModal(btn.dataset.id));
   });
@@ -71,24 +68,32 @@ async function drawAttendance(courseId, days){
 
   container.innerHTML = days.map(d=>`
     <div class="att-record">
-      <span>${new Date(d.date).toLocaleDateString()} : 
-        ${d.present ? '✔ Presente' : d.absent ? '✘ Ausente' : '— Sin clase'}
+      <span>${new Date(d.date).toLocaleDateString()} :
+        ${d.present ? '✔ Presente' :
+  d.absent ? '✘ Ausente' :
+  d.justified ? '🟡 Justificado' :
+  '— Sin clase'}
+
       </span>
       <button class="btn btn-secondary btn-del-att" data-cid="${courseId}" data-id="${d.id}">❌</button>
     </div>
   `).join('');
 
-  // listeners de borrar
+
   container.querySelectorAll('.btn-del-att').forEach(btn=>{
     btn.addEventListener('click', ()=> deleteAttendance(btn.dataset.cid, btn.dataset.id));
   });
 
-  // porcentaje (ignora noClass)
-  const validDays = days.filter(d=>!d.noClass);
-  const ok = validDays.filter(d=>d.present).length;
-  const percent = validDays.length ? Math.round((ok/validDays.length)*100) : 0;
+const validDays = days.filter(d=>!d.noClass);
+const ok = validDays.filter(d=>d.present || d.justified).length;
+const percent = validDays.length ? Math.round((ok/validDays.length)*100) : 0;
+
   const el = document.querySelector(`.att-percent[data-id="${courseId}"]`);
   if (el) el.textContent = percent + '%';
+
+if (!window.courseAttendance) window.courseAttendance = {};
+window.courseAttendance[courseId] = percent;
+
 }
 
 
@@ -97,7 +102,7 @@ let currentCourseForAttendance = null;
 
 function openAttendanceModal(courseId){
   currentCourseForAttendance = courseId;
-  $('attDate').value = new Date().toISOString().split('T')[0]; // hoy por defecto
+  $('attDate').value = new Date().toISOString().split('T')[0];
   $('attModal').classList.add('active');
 }
 
@@ -106,12 +111,12 @@ function closeAttendanceModal(){
   currentCourseForAttendance = null;
 }
 
-// eventos de modal
 document.addEventListener('DOMContentLoaded', ()=>{
   $('attCancel')?.addEventListener('click', closeAttendanceModal);
 
   $('attPresente')?.addEventListener('click', ()=> saveAttendance('present'));
   $('attAusente')?.addEventListener('click', ()=> saveAttendance('absent'));
+  $('attJustificado')?.addEventListener('click', ()=> saveAttendance('justified'));
   $('attNoClass')?.addEventListener('click', ()=> saveAttendance('noClass'));
 });
 
@@ -126,18 +131,21 @@ async function saveAttendance(status) {
     'users', state.currentUser.uid,
     'semesters', state.activeSemesterId,
     'courses', currentCourseForAttendance,
-    'attendance', date // el ID del doc será la fecha
+    'attendance', date
   );
 
   await setDoc(ref, {
     date,
-    present: status==='present',
-    absent: status==='absent',
-    noClass: status==='noClass'
+    present: status === 'present',
+    absent: status === 'absent',
+    justified: status === 'justified',
+    noClass: status === 'noClass'
   });
 
   closeAttendanceModal();
 }
+
+
 
 async function deleteAttendance(courseId, date){
   const ref = doc(

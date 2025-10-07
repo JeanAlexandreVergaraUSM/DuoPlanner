@@ -2,7 +2,6 @@
 <html lang="es">
 <head>
 
-  <!-- Export helpers -->
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" defer></script>
 
@@ -16,7 +15,6 @@
 
 
   <title>DuoPlanner</title>
-  <!-- Tus estilos personalizados -->
   <link rel="stylesheet" href="./css/styles.css">
 
 
@@ -27,7 +25,6 @@
     
     
     :root {
-      /* Paleta de colores vibrante y juvenil */
       --primary: #6366f1;
       --primary-dark: #4f46e5;
       --primary-light: #818cf8;
@@ -1205,6 +1202,39 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 
+/* === Colores para los botones del modal de asistencia === */
+.att-present {
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: white;
+}
+
+.att-absent {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  color: #fff;
+}
+
+.att-justified {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #111;
+  font-weight: 600;
+}
+
+.att-noclass {
+  background: linear-gradient(135deg, #ef4444, #7f1d1d);
+  color: #fff;
+  opacity: 0.85;
+}
+
+/* Efecto hover */
+.att-present:hover,
+.att-absent:hover,
+.att-justified:hover,
+.att-noclass:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+}
+
+
 /*termina*/
 
   </style>
@@ -1218,7 +1248,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div class="header-content">
     <div class="brand">DuoPlanner</div>
 
-    <!-- NAV: agrega clase 'tab' a cada botón para el router -->
     <nav class="nav nav-tabs">
       <button class="nav-tab tab active" data-route="#/perfil">Perfil</button>
       <button class="nav-tab tab" data-route="#/semestres">Semestres</button>
@@ -1233,7 +1262,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <nav class="nav nav-tabs"> </nav>
     </nav>
 
-    <!-- AUTH: hermano del nav, NO dentro del nav -->
     <div class="auth-area">
       <button id="signInBtn" class="btn btn-secondary" style="padding:0.4rem 0.8rem">
         Iniciar sesión con Google
@@ -1258,7 +1286,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div class="container">
    
 
-    <!-- PERFIL Section (CORREGIDO) -->
+    <!-- PERFIL Section -->
 <section id="page-perfil" class="page card">
 
  <!-- Welcome Banner -->
@@ -1327,10 +1355,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         <label for="pfPhone">Teléfono</label>
         <input id="pfPhone" type="tel" placeholder="+56 9 1234 5678" />
       </div>
-    </div><!-- /.form-grid -->
-  </div><!-- /.profile-section -->
+    </div>
+  </div>
 
-  <!-- Acciones fuera del grid -->
   <div id="pfActions" style="margin-top: 2rem; display: flex; gap: 1rem;">
     <button id="pfSaveBtn" class="btn">💾 Guardar cambios</button>
     <button id="pfCancelBtn" class="btn btn-secondary">Cancelar</button>
@@ -1344,7 +1371,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   
 
-  <!-- AVISO: falta universidad en Perfil -->
   <div id="semNoticeNoUni" class="muted" style="margin-top:1rem">
     Completa tu <b>Universidad</b> en la pestaña <b>Perfil</b> para crear semestres.
   </div>
@@ -1375,10 +1401,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     </div>
   </div>
 
-  <!-- Cursos del semestre activo (courses.js lo usa/llena) -->
+  <!-- Cursos del semestre activo  -->
 <div id="coursesSection" class="card hidden" style="margin-top:1rem">
   <h3 style="margin-top:0">📘 Ramos del semestre activo</h3>
-  <!-- courses.js se encargará de renderizar formulario y lista aquí -->
   <div id="coursesHost">
   <div class="form-grid" style="margin-bottom:1rem">
     <div class="form-field">
@@ -1422,14 +1447,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 </div>
 
 
-  <!-- Lista de semestres del usuario -->
   <div class="card" style="margin-top:1rem">
     <h3 style="margin-top:0">🗂️ Tus semestres</h3>
     <div id="semestersList" class="grades-container"></div>
   </div>
 </section>
 
-<!-- HORARIO Section (reemplaza tu sección completa) -->
+<!-- HORARIO Section  -->
 <section id="page-horario" class="page card hidden">
   <h2>📅 Mi Horario</h2>
 
@@ -1448,16 +1472,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 </div>
 
 
-  <!-- Horario propio (schedule.js lo llena) -->
+  <!-- Horario propio  -->
   <div id="horarioPropio"></div>
 
-  <!-- Horario compartido (schedule.js lo llena) -->
+  <!-- Horario compartido  -->
   <div id="horarioCompartido" class="hidden"></div>
 </section>
 
-
-
-    <!-- NOTAS Section -->
 <!-- NOTAS Section -->
 <section id="page-notas" class="page card hidden">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
@@ -1518,7 +1539,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div class="card" style="margin-bottom:1rem;">
     <h3 style="margin-top:0">Evaluaciones</h3>
 
-    <!-- Lista renderizada por JS -->
     <div id="gr-evalsList" class="grades-container" style="margin-bottom:1rem;"></div>
 
     <!-- Form para crear/editar evaluación -->
@@ -1616,17 +1636,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   <!-- 1) Avance global -->
   <div id="prog-global" class="card" style="margin-top:12px">
-    <!-- progreso.js lo rellena -->
   </div>
 
   <!-- 2) Victorias del semestre (solo aprobados) -->
   <div id="prog-semestre" class="card" style="margin-top:12px">
-    <!-- progreso.js lo rellena -->
   </div>
 
   <!-- 3) Progreso combinado con pareja (aparece solo si hay pareja) -->
   <div id="prog-combinado" class="card hidden" style="margin-top:12px">
-    <!-- progreso.js lo rellena -->
   </div>
 </section>
 
@@ -1745,7 +1762,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   </div>
 
   <div id="asistenciaList" class="grades-container" style="margin-top:1rem;"></div>
-    <!-- attendance.js llenará aquí la lista de cursos con asistencia -->
   </div>
 </section>
   </div>
@@ -1756,10 +1772,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     <input type="date" id="attDate" style="margin-bottom:1rem;width:100%">
 
     <div style="display:flex;gap:8px;justify-content:space-between;">
-      <button id="attPresente" class="btn">Presente</button>
-      <button id="attAusente" class="btn btn-secondary">Ausente</button>
-      <button id="attNoClass" class="btn btn-secondary">No hubo clase</button>
-    </div>
+  <button id="attPresente" class="btn att-present">Presente</button>
+  <button id="attAusente" class="btn att-absent">Ausente</button>
+  <button id="attJustificado" class="btn att-justified">Justificado</button>
+  <button id="attNoClass" class="btn att-noclass">No hubo clase</button>
+</div>
+
 
     <div style="margin-top:1rem;text-align:right;">
       <button id="attCancel" class="btn btn-secondary">Cancelar</button>
@@ -1798,7 +1816,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   <div class="help-container">
 
-    <!-- PERFIL -->
 <!-- PERFIL -->
 <details>
   <summary>👤 Perfil</summary>
