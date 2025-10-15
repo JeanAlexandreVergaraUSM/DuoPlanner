@@ -1,8 +1,9 @@
 import { db } from './firebase.js';
 import { $, state, setHidden } from './state.js';
+import { preloadAttendanceData } from './attendance.js';
 import {
   collection, query, orderBy, getDocs, onSnapshot, doc, getDoc,
-  addDoc, updateDoc, deleteDoc, setDoc
+  addDoc, updateDoc, deleteDoc, setDoc , serverTimestamp 
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 
@@ -14,6 +15,44 @@ let header = { scale: 'USM', finalExpr: '', rulesText: '' };
 // --- Referencias cruzadas de notas finales (otros ramos del MISMO semestre) ---
 let crossFinals = { byName:{}, byCode:{}, byId:{} };  // caches
 let unsubGrades = null;
+
+/* ====== Nombres de grupos (ruta corregida) ====== */
+let _groupNamesCache = null; // { certamenes:'...', controles:'...', ... }
+
+function groupsDocRef(){
+  return doc(
+    db,
+    'users', state.currentUser.uid,
+    'semesters', state.activeSemesterId,
+    'courses', currentCourseId,
+    'groups', 'meta'     // 👈 subcolección correcta
+  );
+}
+
+async function loadGroupNames(){
+  _groupNamesCache = null;
+  if (!readyPath()) return;
+  try {
+    const snap = await getDoc(groupsDocRef());
+    _groupNamesCache = snap.exists() ? (snap.data() || {}) : {};
+  } catch (err) {
+    console.error('Error cargando nombres de grupos:', err);
+    _groupNamesCache = {};
+  }
+}
+
+async function saveGroupName(key, value){
+  if (!readyPath()) return;
+  try{
+    await setDoc(groupsDocRef(), { [key]: value }, { merge:true });
+    _groupNamesCache = { ...(_groupNamesCache || {}), [key]: value };
+  }catch(err){
+    console.error('Error guardando nombre de grupo:', err);
+    throw err;
+  }
+}
+
+
 
 export function registerGradesUnsub(unsub){
   unsubGrades = unsub;
@@ -39,7 +78,7 @@ export function clearGradesUI(){
   const need = $('gr-neededToPass');   if (need) need.textContent = '—';
   const st   = $('gr-status');         if (st)   st.textContent   = '—';
 
-  // vista de pareja (si la tienes)
+  // vista de duo (si la tienes)
   const pv   = $('gr-partnerView');    if (pv)   pv.classList.add('hidden');
   const pSel = $('gr-sh-semSel');      if (pSel) pSel.innerHTML = '';
   const pLst = $('gr-sh-list');        if (pLst) pLst.innerHTML = '';
@@ -49,6 +88,13 @@ export function clearGradesUI(){
 export function initGrades(){
   bindUi();
 }
+
+// 🔹 Recalcula las notas cuando se actualiza la asistencia
+document.addEventListener('attendance:ready', (e) => {
+  console.log('🔁 Asistencia actualizada para:', e.detail);
+  computeAndRender();
+});
+
 
 // 🔹 Espera un poco tras volver a la pestaña de Notas, para limpiar bien la UI
 document.addEventListener('route:notas', () => {
@@ -79,6 +125,31 @@ export function onActiveSemesterChanged(){
   const lbl = $('gr-activeSemLabel');
   if (lbl) lbl.textContent = state.activeSemesterData?.label || '—';
   loadCoursesIntoSelect();
+
+  // 🔒 Sincroniza el combo "Semestres" con el semestre activo actual
+const shSel = document.getElementById('gr-sh-semSel');
+if (shSel && state.activeSemesterData?.label) {
+  // muestra el semestre activo actual
+  shSel.innerHTML = `<option selected>${state.activeSemesterData.label}</option>`;
+  
+  // bloquea interacción
+  shSel.disabled = true;
+  shSel.style.pointerEvents = 'none';
+  shSel.style.opacity = '0.7';
+}
+
+// ✅ Esperar la precarga de asistencia antes de renderizar las notas
+(async () => {
+  try {
+    await preloadAttendanceData(); // espera la parte getDocs()
+    console.log('✅ Asistencia precargada, ahora sí recalculamos notas');
+    computeAndRender();
+  } catch (err) {
+    console.warn('⚠️ Error precargando asistencia:', err);
+    computeAndRender(); // fallback
+  }
+})();
+
 }
 
 /* =================== UI bindings =================== */
@@ -160,7 +231,7 @@ function ensureSimButton(){
 
   ensureSimButton();
 
-  // 🔹 Panel "Notas de tu pareja" como pestaña
+  // 🔹 Panel "Notas de tu duo" como pestaña
   document.addEventListener('pair:ready', grpPopulateSemesters); // llena select cuando hay pair
 
   // ⬇️ Recalcula al tipear en la fórmula
@@ -290,12 +361,37 @@ async function onCourseChange(e){
 
 
   await loadGradingDoc();
+  await loadGroupNames();  
   await watchComponents();
   await rebuildCrossFinals();
   computeAndRender();
+await forceAttendanceSync(currentCourseId);
 }
 
+async function forceAttendanceSync(courseId) {
+  try {
+    const attRef = collection(
+      db,
+      'users', state.currentUser.uid,
+      'semesters', state.activeSemesterId,
+      'courses', courseId,
+      'attendance'
+    );
+    const attSnap = await getDocs(attRef);
+    const days = attSnap.docs.map(d => d.data());
+    const validDays = days.filter(d => !d.noClass);
+    const ok = validDays.filter(d => d.present || d.justified).length;
+    const percent = validDays.length ? Math.round((ok / validDays.length) * 100) : 0;
 
+    if (!window.courseAttendance) window.courseAttendance = {};
+    window.courseAttendance[courseId] = percent;
+
+    console.log(`✅ Sincronizada asistencia directa de ${courseId}: ${percent}%`);
+    computeAndRender();
+  } catch (err) {
+    console.warn('⚠️ No se pudo sincronizar asistencia directa:', err);
+  }
+}
 
 /* =================== Refs Firestore =================== */
 
@@ -412,24 +508,29 @@ async function saveRules(){
 
 /* =================== Componentes =================== */
 
-async function watchComponents(){
+async function watchComponents() {
   if (unsubComp) { unsubComp(); unsubComp = null; }
-  if (!readyPath()){
-    renderComponents();
-    return;
-  }
+  if (!readyPath()) { renderComponents([]); return; }
+
+  const ref = componentsColRef();
 
   unsubComp = onSnapshot(
-    query(componentsColRef(), orderBy('createdAt')),
-    (snap)=>{
-      components = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
-      renderComponents();
+    query(ref, orderBy('createdAt', 'asc')),
+    async (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      components = list;                 
+      await renderComponents(list);
       computeAndRender();
-      rebuildCrossFinals().then(()=> computeAndRender());
-
+      rebuildCrossFinals().then(() => computeAndRender());
+    },
+    (err) => {
+      console.error('watchComponents error:', err);
+      renderComponents([]);
     }
   );
 }
+
+
 
 async function addEvalFromForm(){
   if (!readyPath()) {
@@ -466,7 +567,7 @@ async function addEvalFromForm(){
     key,
     name,
     score,
-    createdAt: Date.now()
+    createdAt: serverTimestamp()
   });
 
   // limpiar formulario
@@ -495,7 +596,8 @@ async function addComponentPrompt(){
     key: finalKey,
     name: name.trim(),
     score: null,
-    createdAt: Date.now()
+    createdAt: serverTimestamp()
+
   });
   // onSnapshot actualiza la UI
 }
@@ -527,18 +629,48 @@ function ensureUniqueKey(base, comps){
   return k + i;
 }
 
-/* Render UI de componentes */
+async function _normalizeCreatedAtOnce(refColSnap){
+  const ops = [];
+  for (const d of refColSnap.docs){
+    const data = d.data() || {};
+    const ca = data.createdAt;
+    const isTS = ca && typeof ca.toDate === 'function'; // Firestore Timestamp
+    if (!isTS){
+      ops.push(updateDoc(doc(componentsColRef(), d.id), { createdAt: serverTimestamp() }));
+    }
+  }
+  if (ops.length) {
+    try { await Promise.all(ops); } catch(_) {}
+  }
+}
 
-function renderComponents(){
-  const host = $('gr-evalsList');   // <- ahora usa el contenedor de tu HTML
+
+async function renderComponents(list = []) {
+  const host = $('gr-evalsList');
   if (!host) return;
+
+   // 🔹 Guardar valores locales escritos pero aún no guardados
+  const localValues = {};
+  host.querySelectorAll('.grade-item').forEach(item => {
+    const code = item.querySelector('code')?.textContent?.trim();
+    const inp = item.querySelector('[data-f="score"]');
+    if (code && inp && inp.value) {
+      localValues[code] = inp.value;
+    }
+  });
+
+  // 🔹 Guardar qué grupos estaban abiertos antes del re-render
+  const prevOpen = new Set(
+    Array.from(host.querySelectorAll('details.grade-group[open]')).map(d => d.dataset.key)
+  );
+
   host.innerHTML = '';
 
-  if (!currentCourseId){
+  if (!currentCourseId) {
     host.innerHTML = `<div class="muted">Selecciona un ramo.</div>`;
     return;
   }
-  if (!components.length){
+  if (!list.length) {
     host.innerHTML = `<div class="muted">Aún no hay evaluaciones. Usa “Agregar evaluación”.</div>`;
     return;
   }
@@ -548,43 +680,145 @@ function renderComponents(){
   const max  = isMayor ? 7 : 100;
   const step = isMayor ? 0.1 : 1;
 
-  components.forEach(c=>{
-    const card = document.createElement('div');
-    card.className = 'grade-item';
-    card.innerHTML = `
-      <div style="flex:1">
-        <div style="font-weight:700">${esc(c.name || c.key)}</div>
-        <div class="muted">Código: <code>${esc(c.key)}</code></div>
-      </div>
-      <div style="display:flex;align-items:center;gap:.5rem">
-        <input data-f="score" type="number" step="${step}" min="${min}" max="${max}" value="${c.score??''}" style="width:110px"/>
-        <button data-act="save" class="btn btn-secondary">Guardar</button>
-        <button data-act="del"  class="btn btn-secondary">Eliminar</button>
-      </div>
-    `;
-    host.appendChild(card);
+  // Agrupación extendida
+  const grupos = {
+    certamenes:  list.filter(c => /^C\d*/i.test(c.key) || /certamen/i.test(c.name)),
+    controles:   list.filter(c => /^CTRL/i.test(c.key) || /control/i.test(c.name)),
+    tareas:      list.filter(c => /^T\d*/i.test(c.key) || /tarea/i.test(c.name)),
+    proyecto:    list.filter(c => /proy/i.test(c.key) || /proyecto/i.test(c.name)),
+    evaluaciones: list.filter(c => /evaluaci[oó]n/i.test(c.name)),
+    experiencias: list.filter(c => /experien/i.test(c.name)),
+    preinformes:  list.filter(c => /pre[\s-]?informe/i.test(c.name)),
+    informes:     list.filter(c => /\binforme/i.test(c.name) && !/pre[\s-]?informe/i.test(c.name)),
+    laboratorios: list.filter(c => /\blab/i.test(c.key) || /laboratorio/i.test(c.name)),
+    otros:        list.filter(c =>
+      !(/^(C\d*|CTRL|T\d*|LAB)/i.test(c.key) ||
+        /certamen|control|tarea|proy|evaluaci[oó]n|experien|informe|laboratorio/i.test(c.name))
+    )
+  };
 
-    card.addEventListener('click', async (e)=>{
-      const t = e.target;
-      if (!(t instanceof HTMLElement)) return;
+  const defaultNames = {
+    certamenes:   'Certámenes',
+    controles:    'Controles',
+    tareas:       'Tareas',
+    proyecto:     'Proyecto',
+    evaluaciones: 'Evaluaciones',
+    experiencias: 'Experiencias',
+    preinformes:  'Pre-informes',
+    informes:     'Informes',
+    laboratorios: 'Laboratorios',
+    otros:        'Otros'
+  };
 
-      if (t.dataset.act === 'save'){
-        const inp = card.querySelector('[data-f="score"]');
-        let v = parseFloat(inp.value);
-        const score = isNaN(v) ? null : clamp(v, min, max);
-        await updateDoc(doc(componentsColRef(), c.id), { score });
-        t.textContent = 'Guardado ✓';
-        computeAndRender();
-        setTimeout(()=> t.textContent = 'Guardar', 1200);
-      }
+  const names = { ...defaultNames, ...(_groupNamesCache || {}) };
 
-      if (t.dataset.act === 'del'){
-        if (!confirm(`Eliminar “${c.name || c.key}”?`)) return;
-        await deleteDoc(doc(componentsColRef(), c.id));
+  // 🔹 Render de cada grupo como <details>
+  for (const [key, items] of Object.entries(grupos)) {
+    if (!items.length) continue;
+
+    const details = document.createElement('details');
+    details.className = 'grade-group';
+    details.dataset.key = key;
+
+    // ✅ restaurar estado abierto si estaba abierto antes
+    if (prevOpen.has(key)) details.open = true;
+
+    const summary = document.createElement('summary');
+    summary.style.display = 'flex';
+    summary.style.alignItems = 'center';
+    summary.style.justifyContent = 'space-between';
+    summary.style.width = '100%';
+    summary.style.cursor = 'pointer';
+
+    const title = names[key] || defaultNames[key] || key;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.style.fontWeight = '700';
+    titleSpan.textContent = `${title} (${items.length})`;
+
+    const editBtn = document.createElement('button');
+    editBtn.dataset.rename = key;
+    editBtn.className = 'ghost';
+    editBtn.textContent = '✎';
+    Object.assign(editBtn.style, {
+      fontSize: '0.9em',
+      opacity: '0.8',
+      marginLeft: '8px',
+      flexShrink: '0'
+    });
+
+    summary.appendChild(titleSpan);
+    summary.appendChild(editBtn);
+    details.appendChild(summary);
+
+    const groupContainer = document.createElement('div');
+
+    items.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'grade-item';
+      card.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:700">${esc(c.name || c.key)}</div>
+          <div class="muted">Código: <code>${esc(c.key)}</code></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <input data-f="score" type="number" step="${step}" min="${min}" max="${max}" 
+                 value="${localValues[c.key] ?? c.score ?? ''}"
+ style="width:110px"/>
+          <button data-act="save" class="btn btn-secondary">Guardar</button>
+          <button data-act="del"  class="btn btn-secondary">Eliminar</button>
+        </div>
+      `;
+
+      card.addEventListener('click', async (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+
+        if (t.dataset.act === 'save') {
+          const inp = card.querySelector('[data-f="score"]');
+          let v = parseFloat(inp.value);
+          const score = isNaN(v) ? null : clamp(v, min, max);
+          await updateDoc(doc(componentsColRef(), c.id), { score });
+          t.textContent = 'Guardado ✓';
+          computeAndRender();
+          setTimeout(() => t.textContent = 'Guardar', 1200);
+        }
+
+        if (t.dataset.act === 'del') {
+          if (!confirm(`Eliminar “${c.name || c.key}”?`)) return;
+          await deleteDoc(doc(componentsColRef(), c.id));
+        }
+      });
+
+      groupContainer.appendChild(card);
+    });
+
+    details.appendChild(groupContainer);
+    host.appendChild(details);
+
+    // 🔹 Renombrar grupo
+    editBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const curName = names[key] || defaultNames[key] || key;
+      const newName = prompt(`Nuevo nombre para “${curName}”:`, curName);
+      if (!newName || newName.trim() === curName) return;
+
+      try {
+        await saveGroupName(key, newName.trim());
+        renderComponents(components);
+      } catch {
+        alert('No se pudo guardar el nuevo nombre.');
       }
     });
-  });
+  }
 }
+
+
+
+
+
+
 
 
 
@@ -819,27 +1053,39 @@ function parseComparison(s){
   return { left: normalizeExpr(m[1].trim()), op: m[2], right: normalizeExpr(m[3].trim()) };
 }
 
-function compare(a, op, b){
+function compare(a, op, b) {
   if (!(isFinite(a) && isFinite(b))) return false;
-  switch(op){
-    case '>=': return a >= b;
-    case '<=': return a <= b;
-    case '>':  return a >  b;
-    case '<':  return a <  b;
-    case '==': return a === b;
-    case '!=': return a !== b;
+
+  // 🔹 Redondear a 1 decimal para seguridad y luego al entero más cercano
+  const A = Math.round((Math.round(a * 10) / 10));
+  const B = Math.round((Math.round(b * 10) / 10));
+
+  switch (op) {
+    case '>=': return A >= B;
+    case '<=': return A <= B;
+    case '>':  return A >  B;
+    case '<':  return A <  B;
+    case '==': return A === B;
+    case '!=': return A !== B;
     default: return false;
   }
 }
 
-// avg(x,y,...) helper
-function avg(...xs){
-  const arr = Array.isArray(xs[0]) ? xs[0] : xs;
-  if (!arr.length) return NaN;
-  let n=0, s=0;
-  for (const v of arr){ if (typeof v === 'number' && isFinite(v)) { s+=v; n++; } }
-  return n? (s/n) : NaN;
+
+
+// Reemplaza la versión antigua
+// ✅ Corrige el cálculo promedio con múltiples argumentos
+function avg(...args) {
+  const nums = args
+    .map(x => (typeof x === 'number' && isFinite(x)) ? x : Number(x))
+    .filter(x => !isNaN(x));
+
+  if (!nums.length) return NaN;
+  const sum = nums.reduce((a, b) => a + b, 0);
+  return sum / nums.length;
 }
+
+
 
 /* ======= Resultado ======= */
 
@@ -940,15 +1186,16 @@ function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
 /* ---------- Fórmulas ---------- */
 
-// Mantiene el texto como lo escribió el usuario (NO toca %)
 function normalizeExpr(expr){
   if (!expr) return '';
   let s = String(expr).trim();
   s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'"); // tipográficas → rectas
-  s = s.replace(/,/g, '.');      // coma decimal → punto
+  // ❌ NO convertir comas a puntos aquí (rompe avg(E1,E2))
+  // s = s.replace(/,/g, '.');
   s = s.replace(/\s+/g, ' ');    // compacta espacios
   return s;
 }
+
 
 // Envuelve en comillas los argumentos de final()/finalCode()/finalId() si no vienen con comillas.
 // Ej.: final(Laboratorio de Física) -> final("Laboratorio de Física")
@@ -1043,7 +1290,7 @@ function parseCodesFromFormula(formula){
 /* ---- Render del panel ---- */
 
 
-/* ---- Sufijos “(pareja: …)” en el resultado propio ---- */
+/* ---- Sufijos “(duo: …)” en el resultado propio ---- */
 
 function truncate(val, scale){
   if (val == null || isNaN(val)) return null;
@@ -1105,7 +1352,7 @@ function lookupFinalById(id){
   return (hit && typeof hit.final === 'number') ? hit.final : NaN;
 }
 
-// ====== MODO "NOTAS DE MI PAREJA" (simple) ======
+// ====== MODO "NOTAS DE MI DUO" (simple) ======
 
 // 3.1 Toggle (usa el botón #gr-togglePartner y los contenedores del HTML nuevo)
 (function setupPartnerToggle(){
@@ -1125,7 +1372,7 @@ function lookupFinalById(id){
 
   function setMode(on){
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    btn.textContent = on ? 'Volver a mis notas' : 'Notas de mi pareja';
+    btn.textContent = on ? 'Volver a mis notas' : 'Notas de mi duo';
     ownBlocks.forEach(el => setHidden(el, on));
     setHidden(partnerCard, !on);
     if (on) grpPopulateSemesters(); // carga combo al encender
@@ -1136,76 +1383,76 @@ function lookupFinalById(id){
     setMode(!now);
   });
 
-  // si la pareja queda lista, rellenamos
+  // si tu duo queda lista, rellenamos
   document.addEventListener('pair:ready', grpPopulateSemesters);
 })();
 
-// 3.2 Poblar semestres de la pareja (orden AAAA-T desc, sin duplicados)
+// 3.2 Poblar semestres de tu duo (bloqueado al semestre activo actual)
 let _grpPopulateToken = 0;
-async function grpPopulateSemesters(){
-  const sel = $('gr-sh-semSel'); if (!sel) return;
+async function grpPopulateSemesters() {
+  const sel = $('gr-sh-semSel');
+  if (!sel) return;
 
-  // limpiar
+  // Limpia
   sel.innerHTML = '';
-  const opt0 = document.createElement('option');
-  opt0.value = ''; opt0.textContent = '— seleccionar —';
-  sel.appendChild(opt0);
+  const optLoading = document.createElement('option');
+  optLoading.textContent = 'Cargando...';
+  optLoading.disabled = true;
+  optLoading.selected = true;
+  sel.appendChild(optLoading);
 
-  if (!state.pairOtherUid) return;
+  // Si no hay dúo, mostrar mensaje
+  if (!state.pairOtherUid) {
+    sel.innerHTML = '<option selected>No disponible</option>';
+    sel.disabled = true;
+    sel.style.pointerEvents = 'none';
+    sel.style.opacity = '0.7';
+    return;
+  }
 
   const myToken = ++_grpPopulateToken;
-
-  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-                   .replace(/\s+/g,' ').trim();
-  const canon = s => {
-    const t = norm(s);
-    const m = t.replace(/[^\d\-\/ ]+/g,'').match(/(\d{4})\D*([12])$/);
-    return m ? `${m[1]}-${m[2]}` : t.toLowerCase();
-  };
-  const parseYT = label => {
-    const m = /^(\d{4})-(1|2)$/.exec(canon(label));
-    return m ? { y:+m[1], t:+m[2] } : { y:-Infinity, t:-Infinity };
-  };
-
-  const ref = collection(db,'users',state.pairOtherUid,'semesters');
-  const snap = await getDocs(query(ref)); // ordenaremos nosotros
+  const ref = collection(db, 'users', state.pairOtherUid, 'semesters');
+  const snap = await getDocs(ref);
   if (myToken !== _grpPopulateToken) return;
 
-  const byKey = new Map();
-  snap.forEach(d=>{
-    const shown = norm(d.data()?.label || d.id);
-    const key = canon(shown);
-    if (!byKey.has(key)){
-      const { y, t } = parseYT(shown);
-      byKey.set(key, { id:d.id, labelToShow:shown, y, t });
-    }
+  const activeLabel = state.activeSemesterData?.label || null;
+
+  if (!activeLabel) {
+    sel.innerHTML = '<option selected>No disponible</option>';
+    sel.disabled = true;
+    sel.style.pointerEvents = 'none';
+    sel.style.opacity = '0.7';
+    return;
+  }
+
+  // Busca si el dúo tiene ese mismo semestre (por label)
+  let match = null;
+  snap.forEach(d => {
+    const lbl = (d.data()?.label || '').trim();
+    if (lbl === activeLabel) match = { id: d.id, label: lbl };
   });
 
-  const options = Array.from(byKey.values()).sort((a,b)=> (b.y-a.y) || (b.t-a.t));
-
-  const frag = document.createDocumentFragment();
-  for (const { id, labelToShow } of options){
-    const o = document.createElement('option');
-    o.value = id; o.textContent = labelToShow;
-    frag.appendChild(o);
-  }
-  sel.appendChild(frag);
-
-  const prev = state.shared?.notas?.semId || '';
-  if (prev && Array.from(sel.options).some(o=>o.value===prev)){
-    sel.value = prev;
+  if (match) {
+    // Si lo tiene → lo muestra y suscribe normalmente
+    sel.innerHTML = `<option selected>${match.label}</option>`;
+    sel.disabled = true;
+    sel.style.pointerEvents = 'none';
+    sel.style.opacity = '0.7';
+    state.shared.notas.semId = match.id;
+    subscribePartnerGrades(match.id);
   } else {
-    const first = Array.from(sel.options).find(o=>o.value);
-    sel.value = first ? first.value : '';
+    // Si no lo tiene → muestra "No disponible"
+    sel.innerHTML = '<option selected>No disponible</option>';
+    sel.disabled = true;
+    sel.style.pointerEvents = 'none';
+    sel.style.opacity = '0.7';
+    state.shared.notas.semId = null;
+    const list = $('gr-sh-list');
+    if (list) list.innerHTML = '<div class="muted">Tu dúo no tiene este semestre creado.</div>';
   }
-  state.shared.notas.semId = sel.value || null;
-
-  sel.onchange = ()=>{
-    state.shared.notas.semId = sel.value || null;
-    subscribePartnerGrades(state.shared.notas.semId);
-  };
-  subscribePartnerGrades(state.shared.notas.semId);
 }
+
+
 
 // 3.3 Suscribir y renderizar notas por semestre (solo final + estado)
 let _grpUnsubCourses = null;
@@ -1222,7 +1469,7 @@ async function subscribePartnerGrades(semId){
   const uniReadable = semSnap.exists() ? (semSnap.data().universityAtThatTime || '') : '';
   const SCALE = /mayor/i.test(uniReadable) ? 'MAYOR' : 'USM';
 
-  // cursos del semestre (pareja)
+  // cursos del semestre (duo)
   const coursesRef = collection(db,'users',state.pairOtherUid,'semesters',semId,'courses');
   _grpUnsubCourses = onSnapshot(query(coursesRef, orderBy('name')), async (snap)=>{
     if (!snap.size){ renderPartnerRows([]); return; }
@@ -1677,7 +1924,8 @@ async function gr_saveSimulation(gradesMap, formulaStr) {
     rules: parseRules(header.rulesText || ''),
     semId: state.activeSemesterId || null,
     courseId: state.editingCourseId || null,
-    createdAt: Date.now()
+    createdAt: serverTimestamp()
+
   };
 
   if (state.currentUser && state.activeSemesterId && state.editingCourseId) {

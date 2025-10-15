@@ -101,10 +101,10 @@ async function ensureMallaLiveAfterPair(){
     host.dataset.ready = '1';
   }
 
-  // Asegura que exista el toggle "Ver malla de mi pareja"
+  // Asegura que exista el toggle "Ver malla de mi duo"
   setupPartnerToggle?.();
 
-  // Si la vista de pareja está activada y ya hay pareja → suscríbete
+  // Si la vista de duo está activada y ya hay duo → suscríbete
   if (state.shared?.malla?.enabled && state.pairOtherUid){
     watchPartnerMalla();
   } else {
@@ -116,7 +116,7 @@ async function ensureMallaLiveAfterPair(){
 }
 
 
-/* ================= Helpers: modo pareja/solo‑lectura ================= */
+/* ================= Helpers: modo duo/solo‑lectura ================= */
 function isPartnerView(){
   return !!(state.shared?.malla?.enabled && state.pairOtherUid);
 }
@@ -149,7 +149,7 @@ function buildShell(host){
     const it = e.target.closest('.grid-item');
     if (!it) return;
 
-    // ⛔ Si es vista de pareja (solo-lectura), no permitir tildar/destildar
+    // ⛔ Si es vista de duo (solo-lectura), no permitir tildar/destildar
     if (isPartnerView() || $('malla-wrapper')?.dataset.readonly === '1') return;
 
     it.classList.toggle('aprobado');
@@ -418,13 +418,13 @@ function renderMalla(careerCode){
   // listeners de la cabecera
   gridHeader.querySelectorAll('.year').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      if (isPartnerView() || $('malla-wrapper')?.dataset.readonly === '1') return; // ⛔ bloquea en pareja
+      if (isPartnerView() || $('malla-wrapper')?.dataset.readonly === '1') return; // ⛔ bloquea en duo
       toggleYear(parseInt(btn.dataset.year,10));
     });
   });
   gridHeader.querySelectorAll('.sem').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      if (isPartnerView() || $('malla-wrapper')?.dataset.readonly === '1') return; // ⛔ bloquea en pareja
+      if (isPartnerView() || $('malla-wrapper')?.dataset.readonly === '1') return; // ⛔ bloquea en duo
       toggleSemester(btn.dataset.sem);
     });
   });
@@ -540,7 +540,7 @@ loadState(section, careerCode);
 actualizarDependencias(section, careerCode);
 updatePercentage(section);
 
-// ❗No guardes estado cuando estás viendo la malla de la pareja
+// ❗No guardes estado cuando estás viendo la malla de tu duo
 if (!isPartnerView()) {
   try { saveState(section); } catch {}
 }
@@ -584,7 +584,7 @@ function areaClass(area){
 function toggleYear(year){
   const host = $('malla-wrapper');
   if (!host) return;
-  // ⛔ bloquea en pareja
+  // ⛔ bloquea en duo
   if (isPartnerView() || host.dataset.readonly === '1') return;
 
   const items = host.querySelectorAll(`.grid-item[data-year="${year}"]`);
@@ -598,7 +598,7 @@ function toggleYear(year){
 function toggleSemester(roman){
   const host = $('malla-wrapper');
   if (!host) return;
-  // ⛔ bloquea en pareja
+  // ⛔ bloquea en duo
   if (isPartnerView() || host.dataset.readonly === '1') return;
 
   const items = host.querySelectorAll(`.grid-item[data-sem="${roman}"]`);
@@ -676,7 +676,7 @@ async function saveState(host){
   // 🚀 Avisa de inmediato al tab Progreso (sin esperar red)
   try { document.dispatchEvent(new Event('malla:updated')); } catch(_) {}
 
-  // Espejo en Firestore para vista en pareja (opcional/asincrónico)
+  // Espejo en Firestore para vista en duo (opcional/asincrónico)
   if (state.currentUser){
     const ref = doc(db,'users',state.currentUser.uid,'malla','state');
     await setDoc(ref, { career, approved: aprob, updatedAt: Date.now() }, { merge:true });
@@ -704,7 +704,7 @@ function updatePercentage(host){
 }
 
 
-/* ================= Toggle + suscripción a malla de la pareja ================= */
+/* ================= Toggle + suscripción a malla de tu duo ================= */
 
 function setupPartnerToggle(){
   const host = $('malla-host');
@@ -726,7 +726,7 @@ function setupPartnerToggle(){
   cb.checked = !!state.shared?.malla?.enabled;
   cb.addEventListener('change', ()=>{
     state.shared.malla.enabled = cb.checked;
-    // Re-render base y luego aplicar (o quitar) la vista de pareja
+    // Re-render base y luego aplicar (o quitar) la vista de duo
     renderFromProfile();
     watchPartnerMalla();
   });
@@ -740,7 +740,7 @@ function watchPartnerMalla(){
   const host = document.getElementById('malla-wrapper');
   if (!host) return;
 
-  // si NO está activado o NO hay pareja → volver a tu malla (Perfil)
+  // si NO está activado o NO hay duo → volver a tu malla (Perfil)
   if (!state.shared?.malla?.enabled || !state.pairOtherUid){
     setPartnerReadonly(false);          // 🔓 tu malla editable
     // invalida cache para forzar re-render de tu malla
@@ -750,9 +750,9 @@ function watchPartnerMalla(){
     return;
   }
 
-  setPartnerReadonly(true);             // 🔒 vista pareja solo-lectura
+  setPartnerReadonly(true);             // 🔒 vista duo solo-lectura
 
-  // Suscripción al documento de malla de la pareja
+  // Suscripción al documento de malla de tu duo
   const ref = doc(db,'users', state.pairOtherUid, 'malla', 'state');
   unsubMallaPartner = onSnapshot(ref, async (snap)=>{
     const data = snap.data() || {};
@@ -765,7 +765,7 @@ function watchPartnerMalla(){
       partnerCareer = null;
     }
 
-    // 🔹 Fallback: si no hay career en malla/state, toma el career del perfil de la pareja
+    // 🔹 Fallback: si no hay career en malla/state, toma el career del perfil de tu duo
     if (!partnerCareer && state.pairOtherUid){
       try{
         const profSnap = await getDoc(doc(db,'users', state.pairOtherUid));
@@ -776,12 +776,12 @@ function watchPartnerMalla(){
       }catch(_){ /* ignora errores de red/permiso */ }
     }
 
-    // 1) Si hay carrera de la pareja (desde malla o perfil), forzar render de esa carrera
+    // 1) Si hay carrera de tu duo (desde malla o perfil), forzar render de esa carrera
     if (partnerCareer){
       await forceRenderCareer(partnerCareer); // ← helper que re-renderiza y ajusta caption
     }
 
-    // 2) Aplicar aprobados de la pareja sobre la malla actualmente mostrada
+    // 2) Aplicar aprobados de tu duo sobre la malla actualmente mostrada
     const wrapper = $('malla-wrapper');
     if (!wrapper) return;
 
@@ -795,7 +795,7 @@ function watchPartnerMalla(){
     actualizarDependencias(wrapper);
     updatePercentage(wrapper);
 
-    // 4) Caption “vista de tu pareja”
+    // 4) Caption “vista de tu duo”
     const caption = $('malla-caption');
     if (caption && partnerCareer && !caption.textContent.includes('vista de la otra persona')){
       caption.textContent = `${CAREER_NAMES[partnerCareer] || partnerCareer} · (vista de la otra persona)`;
@@ -809,7 +809,7 @@ function watchPartnerMalla(){
 }
 
 
-// Fuerza render a una carrera específica (ignora Perfil). Útil para "ver malla pareja".
+// Fuerza render a una carrera específica (ignora Perfil). Útil para "ver malla duo".
 async function forceRenderCareer(careerCode){
   const section = $('page-malla');
   if (!section) return;
@@ -823,7 +823,7 @@ async function forceRenderCareer(careerCode){
   // renderFromProfile() NO se salte el re-render
   lastRenderedKey = `FORCED:${careerCode}`;
 
-  // Ajusta caption para modo pareja
+  // Ajusta caption para modo duo
   const caption = $('malla-caption');
   caption.textContent = `${CAREER_NAMES[careerCode] || careerCode} · (vista de la otra persona)`;
 

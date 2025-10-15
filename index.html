@@ -1235,6 +1235,50 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 
+.placed.dragging {
+  opacity: 0.7;
+  transform: scale(1.05);
+  transition: transform 0.15s ease;
+}
+
+/* === Horario continuo (tipo Google Calendar) === */
+.timeline {
+  display: grid;
+  grid-template-columns: 60px repeat(5, 1fr);
+  background: rgba(255,255,255,0.05);
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  height: 1000px; /* ajusta altura si quieres */
+}
+
+.timeline-hour {
+  position: relative;
+  height: calc(1000px / 14); /* 14 horas: 8:00-22:00 */
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding-left: 6px;
+}
+
+.timeline-day {
+  position: relative;
+  border-left: 1px solid rgba(255,255,255,0.08);
+}
+
+.timeline-block {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  border-radius: 8px;
+  color: white;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+
 /*termina*/
 
   </style>
@@ -1254,7 +1298,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <button class="nav-tab tab" data-route="#/horario">Horario</button>
       <button class="nav-tab tab" data-route="#/notas">Notas</button>
       <button class="nav-tab tab" data-route="#/malla">Malla</button>
-      <button class="nav-tab tab" data-route="#/progreso">Progreso</button>
       <button class="nav-tab tab" data-route="#/calendario">Calendario</button>
       <button class="nav-tab tab" data-route="#/asistencia">Asistencia</button>
       <button class="nav-tab tab" data-route="#/party">Party</button> 
@@ -1392,6 +1435,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     <button id="createSemesterBtn" class="btn" style="margin-top: 1rem;">➕ Crear semestre</button>
   </div>
 
+  <div class="card" style="margin-top:1rem">
+    <h3 style="margin-top:0">🗂️ Tus semestres</h3>
+    <div id="semestersList" class="grades-container"></div>
+  </div>
+
+
   <!-- Resumen semestre activo -->
   <div class="card" style="margin-top:1rem">
     <h3 style="margin-top:0">📌 Semestre activo</h3>
@@ -1447,10 +1496,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 </div>
 
 
-  <div class="card" style="margin-top:1rem">
-    <h3 style="margin-top:0">🗂️ Tus semestres</h3>
-    <div id="semestersList" class="grades-container"></div>
-  </div>
+
 </section>
 
 <!-- HORARIO Section  -->
@@ -1461,10 +1507,15 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div class="subtabs" style="display:flex;gap:8px;margin-bottom:12px;">
     <button id="subtabPropio" class="btn btn-secondary active">Mi horario</button>
     <button id="subtabCompartido" class="btn btn-secondary" aria-disabled="true">
-  Horario de mi pareja
+  Horario de mi duo
 </button>
-
+ <button id="subtabCombinado" class="btn btn-secondary hidden">
+  Horario compartido
+</button>
   </div>
+
+ 
+
 
 <div class="export-bar">
   <button id="btn-export-horario-png" class="ghost">Descargar imagen</button>
@@ -1477,6 +1528,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   <!-- Horario compartido  -->
   <div id="horarioCompartido" class="hidden"></div>
+
+  <!-- Horario combinado tipo calendario -->
+<div id="horarioCombinado" class="hidden"></div>
+
 </section>
 
 <!-- NOTAS Section -->
@@ -1484,18 +1539,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
     <h2 style="margin:0">📊 Mis Notas</h2>
     <button id="gr-togglePartner" class="btn btn-secondary" aria-pressed="false">
-      Notas de mi pareja
+      Notas de mi duo
     </button>
   </div>
 
-  <!-- 🔻 Vista PAREJA (oculta por defecto) -->
+  <!-- 🔻 Vista duo (oculta por defecto) -->
   <div id="gr-partnerView" class="card hidden" style="margin-top:12px;">
     <div class="row" style="align-items:flex-end;gap:12px">
       <div>
         <label>Semestres</label><br/>
         <select id="gr-sh-semSel"></select>
       </div>
-      <div class="muted">Elige un semestre para ver sus notas finales.</div>
+   
     </div>
     <div id="gr-sh-list" class="grades-container" style="margin-top:14px"></div>
   </div>
@@ -1629,24 +1684,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   <div id="malla-host"></div>
   
 </section>
-
-<!-- PROGRESO Section -->
-<section id="page-progreso" class="page card hidden">
-  <h2 style="margin-top:0">🏁 Progreso</h2>
-
-  <!-- 1) Avance global -->
-  <div id="prog-global" class="card" style="margin-top:12px">
-  </div>
-
-  <!-- 2) Victorias del semestre (solo aprobados) -->
-  <div id="prog-semestre" class="card" style="margin-top:12px">
-  </div>
-
-  <!-- 3) Progreso combinado con pareja (aparece solo si hay pareja) -->
-  <div id="prog-combinado" class="card hidden" style="margin-top:12px">
-  </div>
-</section>
-
 
 
     <!-- CALENDARIO Section -->
@@ -1804,6 +1841,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <b>ID actual:</b> <span id="pairId">—</span>
     </div>
   </div>
+
+  
 </section>
 
 

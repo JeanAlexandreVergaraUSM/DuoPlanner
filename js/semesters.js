@@ -52,13 +52,18 @@ if (!existing.empty) {
   return;
 }
 
-      await addDoc(ref, {
-        label,
-        universityAtThatTime: uniReadable,
-        createdAt: Date.now()
-      });
+      const newDocRef = await addDoc(ref, {
+  label,
+  universityAtThatTime: uniReadable,
+  createdAt: Date.now()
+});
       if ($('semesterLabel')) $('semesterLabel').value = '';
-      // Nota: si no hay activo, el snapshot activará el más reciente (desc).
+
+// Busca el semestre activo anterior para copiar eventos persistentes
+const prev = state.activeSemesterId || null;
+if (prev) {
+  await copyPersistentEvents(prev, newDocRef.id);
+}
     });
   }
 
@@ -191,6 +196,29 @@ export async function refreshSemestersSub() {
   });
 }
 
+// 🔹 Copia automática de eventos persistentes (calendario)
+async function copyPersistentEvents(oldSemId, newSemId) {
+  const uid = state.currentUser?.uid;
+  if (!uid || !oldSemId || !newSemId) return;
+
+  try {
+    const refOld = collection(db, 'users', uid, 'semesters', oldSemId, 'calendar');
+    const refNew = collection(db, 'users', uid, 'semesters', newSemId, 'calendar');
+    const snap = await getDocs(refOld);
+
+    let copied = 0;
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      if (data.persistent) {
+        await addDoc(refNew, { ...data, createdAt: Date.now() });
+        copied++;
+      }
+    }
+    console.log(`🔁 [Semesters] ${copied} eventos persistentes copiados de ${oldSemId} a ${newSemId}`);
+  } catch (err) {
+    console.error('❌ Error copiando eventos persistentes:', err);
+  }
+}
 
 
 
@@ -205,6 +233,13 @@ export async function setActiveSemester(semId) {
   await setDoc(doc(db, "users", state.currentUser.uid), {
     activeSemester: semId
   }, { merge: true });
+
+  // Si había otro semestre activo antes, copia eventos persistentes
+if (state.lastActiveSemesterId && state.lastActiveSemesterId !== semId) {
+  await copyPersistentEvents(state.lastActiveSemesterId, semId);
+}
+state.lastActiveSemesterId = semId;
+
 
   // Refleja en UI (tarjeta de Semestres)
   const lblEl = $('activeSemesterLabel');
@@ -315,6 +350,7 @@ export async function createSemester(label) {
     universityAtThatTime: uniReadable,
     createdAt: Date.now()
   });
+  
 }
 
 export async function deleteSemester(label) {

@@ -1,9 +1,10 @@
 // js/attendance.js
 import { db } from './firebase.js';
 import { $, state } from './state.js';
-import { collection, doc, onSnapshot, updateDoc, addDoc, setDoc,    deleteDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { collection, doc, onSnapshot, getDocs, updateDoc, addDoc, setDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 let unsubAttendance = null;
+let unsubPreload = null;
 
 export function initAttendance(){
   if (!state.currentUser || !state.activeSemesterId) return;
@@ -68,7 +69,10 @@ async function drawAttendance(courseId, days){
 
   container.innerHTML = days.map(d=>`
     <div class="att-record">
-      <span>${new Date(d.date).toLocaleDateString()} :
+      <span>${
+  new Date(d.date + 'T00:00:00').toLocaleDateString('es-CL', { timeZone: 'America/Santiago' })
+} :
+
         ${d.present ? '✔ Presente' :
   d.absent ? '✘ Ausente' :
   d.justified ? '🟡 Justificado' :
@@ -102,9 +106,17 @@ let currentCourseForAttendance = null;
 
 function openAttendanceModal(courseId){
   currentCourseForAttendance = courseId;
-  $('attDate').value = new Date().toISOString().split('T')[0];
+
+  // 🔹 Ajustar fecha local sin desfase UTC
+  const now = new Date();
+  const localISODate = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    .toISOString()
+    .split('T')[0];
+
+  $('attDate').value = localISODate;
   $('attModal').classList.add('active');
 }
+
 
 function closeAttendanceModal(){
   $('attModal').classList.remove('active');
@@ -123,8 +135,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
 async function saveAttendance(status) {
   if (!currentCourseForAttendance) return;
 
-  const date = $('attDate').value;
-  if (!date) { alert('Selecciona una fecha'); return; }
+  const dateInput = $('attDate').value;
+  if (!dateInput) { alert('Selecciona una fecha'); return; }
+
+  // ✅ Interpretar la fecha en hora local (no UTC)
+  const [year, month, day] = dateInput.split('-').map(Number);
+  const localDate = new Date(year, month - 1, day); // crea la fecha local correctamente
+
+  // ✅ Guardamos el ISO local corregido, pero solo la parte de la fecha
+  const date = localDate.toISOString().split('T')[0];
 
   const ref = doc(
     db,
@@ -147,6 +166,7 @@ async function saveAttendance(status) {
 
 
 
+
 async function deleteAttendance(courseId, date){
   const ref = doc(
     db,
@@ -156,4 +176,80 @@ async function deleteAttendance(courseId, date){
     'attendance', date
   );
   await deleteDoc(ref);
+}
+
+
+export async function preloadAttendanceData() {
+  if (!state.currentUser || !state.activeSemesterId) return;
+
+  // Evita duplicar listeners
+  if (unsubPreload) {
+    try { unsubPreload(); } catch {}
+    unsubPreload = null;
+  }
+
+  if (!window.courseAttendance) window.courseAttendance = {};
+
+  const coursesRef = collection(
+    db,
+    'users', state.currentUser.uid,
+    'semesters', state.activeSemesterId,
+    'courses'
+  );
+
+  /* ---------- 1️⃣ Precarga inmediata sin esperar onSnapshot ---------- */
+  try {
+    const snap = await getDocs(coursesRef);
+    for (const c of snap.docs) {
+      const data = c.data() || {};
+      if (!data.asistencia) continue;
+
+      const attRef = collection(
+        db,
+        'users', state.currentUser.uid,
+        'semesters', state.activeSemesterId,
+        'courses', c.id,
+        'attendance'
+      );
+      const attSnap = await getDocs(attRef);
+      const days = attSnap.docs.map(d => d.data());
+      const valid = days.filter(d => !d.noClass);
+      const ok = valid.filter(d => d.present || d.justified).length;
+      const percent = valid.length ? Math.round((ok / valid.length) * 100) : 0;
+      window.courseAttendance[c.id] = percent;
+    }
+    console.log('⚡ Precarga inicial de asistencia:', window.courseAttendance);
+
+    // 🔹 Emitir evento para que Notas recalcule inmediatamente
+    document.dispatchEvent(new CustomEvent('attendance:ready', { detail: { preload: true } }));
+  } catch (err) {
+    console.error('Error en precarga rápida de asistencia:', err);
+  }
+
+  /* ---------- 2️⃣ Luego activa los listeners reactivos ---------- */
+  unsubPreload = onSnapshot(coursesRef, (snap) => {
+    const asistCourses = snap.docs.filter(d => d.data()?.asistencia);
+    asistCourses.forEach(c => {
+      const attRef = collection(
+        db,
+        'users', state.currentUser.uid,
+        'semesters', state.activeSemesterId,
+        'courses', c.id,
+        'attendance'
+      );
+      onSnapshot(attRef, (attSnap) => {
+        const days = attSnap.docs.map(d => d.data());
+        const valid = days.filter(d => !d.noClass);
+        const ok = valid.filter(d => d.present || d.justified).length;
+        const percent = valid.length ? Math.round((ok / valid.length) * 100) : 0;
+        window.courseAttendance[c.id] = percent;
+
+        // Notifica recalculo solo si cambió un curso
+        document.dispatchEvent(new CustomEvent('attendance:ready', {
+          detail: { courseId: c.id, percent }
+        }));
+      });
+    });
+  });
+  return true;
 }

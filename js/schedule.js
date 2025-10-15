@@ -19,7 +19,7 @@ const AUTO_SPEED = 28;
 
 // 🟦 Guardamos los slots vigentes para numeración sin contar lunch
 let CURRENT_SLOTS = [];         // propio
-let SHARED_CURRENT_SLOTS = [];  // pareja
+let SHARED_CURRENT_SLOTS = [];  // duo
 
 const DAYS = ['Lun','Mar','Mié','Jue','Vie'];
 
@@ -151,10 +151,14 @@ bindRightClickRoom();
 
   // Compartido
   renderSharedShell();
+  autoSelectPartnerSemesterForSchedule();
+
   document.addEventListener('pair:ready', (ev) => {
   const otherUid = ev.detail?.otherUid;
   if (otherUid) {
-    populateSharedSemesters();  // vuelve a llenar el select
+    populateSharedSemesters(); 
+    autoSelectPartnerSemesterForSchedule();
+ // vuelve a llenar el select
   } else {
     const sel = $('sh-semSel');
     if (sel) sel.innerHTML = '<option disabled selected>Sin compañero</option>';
@@ -167,38 +171,81 @@ bindRightClickRoom();
 
   // Subtabs
   const tabProp = $('subtabPropio');
-  const tabComp = $('subtabCompartido');
-  const pageProp = $('horarioPropio');
-  const pageComp = $('horarioCompartido');
+const tabComp = $('subtabCompartido');
+const tabCombi = $('subtabCombinado');
 
-  function showPropio(){
-    tabProp?.classList.add('active'); tabComp?.classList.remove('active');
-    pageProp?.classList.remove('hidden'); pageComp?.classList.add('hidden');
-  }
-  function showCompartido(){
-    if (tabComp?.getAttribute('aria-disabled') === 'true'){
-      alert('Debes emparejarte primero para ver el horario de la otra persona.');
-      return;
-    }
-    tabComp?.classList.add('active'); tabProp?.classList.remove('active');
-    pageComp?.classList.remove('hidden'); pageProp?.classList.add('hidden');
+const pageProp = $('horarioPropio');
+const pageComp = $('horarioCompartido');
+const pageCombi = $('horarioCombinado');
 
-    const sel = $('sh-semSel');
-    if (sel && !sel.value){
-      const first = Array.from(sel.options).find(o => o.value);
-      if (first){ sel.value = first.value; }
-      if (sel?.value){ state.shared.horario.semId = sel.value; }
-    }
-    if (state.shared.horario.semId){
-      subscribeShared(state.shared.horario.semId);
-    } else {
-      populateSharedSemesters();
-    }
+// 🔹 Funciones de cambio
+function showPropio(){
+  tabProp.classList.add('active');
+  tabComp.classList.remove('active');
+  tabCombi.classList.remove('active');
+
+  pageProp.classList.remove('hidden');
+  pageComp.classList.add('hidden');
+  pageCombi.classList.add('hidden');
+}
+
+function showCompartido() {
+  if (tabComp.getAttribute('aria-disabled') === 'true') {
+    alert('Debes emparejarte primero para ver el horario de la otra persona.');
+    return;
   }
 
-  tabProp?.addEventListener('click', showPropio);
-  tabComp?.addEventListener('click', showCompartido);
-  showPropio();
+  // Cambiar pestaña visual
+  tabComp.classList.add('active');
+  tabProp.classList.remove('active');
+  tabCombi.classList.remove('active');
+
+  pageComp.classList.remove('hidden');
+  pageProp.classList.add('hidden');
+  pageCombi.classList.add('hidden');
+
+  // ✅ Garantizar que siempre se cargue el horario del dúo
+  const sel = $('sh-semSel');
+
+  // Si no hay valor en el select, tomar el primer semestre disponible
+  if (sel && !sel.value) {
+    const first = Array.from(sel.options).find(o => o.value);
+    if (first) sel.value = first.value;
+    if (sel?.value) state.shared.horario.semId = sel.value;
+  }
+
+  // Si ya hay semestre asociado, suscribirse al dúo
+  if (state.shared?.horario?.semId) {
+    subscribeShared(state.shared.horario.semId);
+  } else {
+    // Si no, poblar la lista y auto-seleccionar el semestre correcto
+    populateSharedSemesters().then(() => autoSelectPartnerSemesterForSchedule());
+  }
+}
+
+
+function showCombinado(){
+  tabCombi.classList.add('active');
+  tabProp.classList.remove('active');
+  tabComp.classList.remove('active');
+
+  pageCombi.classList.remove('hidden');
+  pageProp.classList.add('hidden');
+  pageComp.classList.add('hidden');
+
+  renderCombinedTimeline();
+}
+
+// 🔹 Listeners
+tabProp.addEventListener('click', showPropio);
+tabComp.addEventListener('click', showCompartido);
+tabCombi.addEventListener('click', showCombinado);
+
+// Inicia mostrando tu horario
+showPropio();
+
+
+
 
 document.addEventListener('courses:changed', () => {
     renderPalette();
@@ -230,6 +277,17 @@ document.addEventListener('courses:changed', () => {
 });
 
 
+// 🟢 Esperar a que haya dúo y semestre, y suscribir automáticamente
+setTimeout(async () => {
+  if (state.pairOtherUid && state.activeSemesterData?.label) {
+    await autoSelectPartnerSemesterForSchedule();
+
+    // Si ya se determinó el semestre del dúo, suscribir de inmediato
+    if (state.shared?.horario?.semId) {
+      await subscribeShared(state.shared.horario.semId);
+    }
+  }
+}, 1500);
 
 }
 
@@ -255,6 +313,7 @@ function renderShell(){
     <div class="muted" style="margin-top:6px">
       <ul style="margin:4px 0 0 20px; padding:0; list-style:disc;">
         <li>Arrastra un ramo a un módulo.</li>
+        <li>Puedes arrastrar ramos del mismo horario.</li>
         <li>La pre-vista indica <b>arriba</b>, <b>completo</b>, <b>abajo</b>, <b>izquierda</b> o <b>derecha</b>.</li>
         <li>Para eliminar un bloque, haz <b>click</b> en la X.</li>
         <li>Para editar un bloque, haz <b>click</b> sobre él.</li>
@@ -410,13 +469,16 @@ function blockHtml(it, pos){
   const h = it.hpos || 'single';
   const title = `${shown}${room ? ` · Sala: ${room}` : ''}`;
 
- return `
+return `
   <div class="placed pos-${pos} h-${h}" data-id="${it.id}"
-       title="${shown}${room ? ` · Sala: ${room}` : ''}"
+       draggable="true"
+       title="${title}"
        style="background:${color}; border:1px solid rgba(0,0,0,0.25);">
     <div class="placed-title" style="color:${text}; font-weight:600;">${shown}</div>
   </div>
 `;
+
+
 }
 
 
@@ -428,6 +490,7 @@ function bindDnD(){
   document.addEventListener('drop',  stopGlobalAutoScroll);
   document.addEventListener('dragend', stopGlobalAutoScroll);
 
+  // 🟦 Arrastrar desde la paleta
   document.addEventListener('dragstart', (e)=>{
     const t = e.target;
     if (t && t.classList.contains('palette-chip')){
@@ -437,10 +500,21 @@ function bindDnD(){
     }
   });
 
-  
+  // 🟩 Arrastrar un bloque ya colocado (mover dentro del horario)
+  document.addEventListener('dragstart', (e) => {
+    const blk = e.target.closest('.placed');
+    if (!blk) return;
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+      type: 'move-block',
+      id: blk.dataset.id
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+    isDraggingChip = false; // no activar auto-scroll
+  });
 
   bindCellDropZones();
 }
+
 
 function bindInlineRename(){
   // Click sobre el título de un bloque (sólo en tu horario, no en el compartido)
@@ -558,129 +632,218 @@ function bindRightClickRoom(){
 }
 
 
-function bindCellDropZones(){
-  document.querySelectorAll('.cell.slot').forEach(cell=>{
+function bindCellDropZones() {
+  document.querySelectorAll('.cell.slot').forEach(cell => {
     if (cell.classList.contains('is-lunch')) return;
 
     // Preview vertical + decide hpos por cursor (izq/centro/der)
-    cell.addEventListener('dragover', (ev)=>{
+    cell.addEventListener('dragover', ev => {
       ev.preventDefault();
-      ev.dataTransfer.dropEffect = 'copy';
+      ev.dataTransfer.dropEffect =
+        ev.dataTransfer.effectAllowed === 'move' ? 'move' : 'copy';
 
       const rect = cell.getBoundingClientRect();
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
-      const ratioY = y / rect.height;
-      const ratioX = x / rect.width;
+      const mid = rect.height / 2;
 
-const mid = rect.height / 2;
-
-let vpos;
-if (y < mid - 10) {        // margen para no ser tan sensible
-  vpos = 'top';
-} else if (y > mid + 10) {
-  vpos = 'bottom';
-} else {
-  vpos = 'full';
-}
-
-
-
+      let vpos = 'full';
+      if (y < mid - 10) vpos = 'top';
+      else if (y > mid + 10) vpos = 'bottom';
 
       let hpos = 'single';
+      const ratioX = x / rect.width;
       if (ratioX < 0.4) hpos = 'left';
       else if (ratioX > 0.6) hpos = 'right';
 
-      cell.dataset.droppos = vpos; // vertical
-      cell.dataset.droph   = hpos; // horizontal
+      cell.dataset.droppos = vpos;
+      cell.dataset.droph = hpos;
       cell.classList.add('over');
 
+      // Limpiar hints anteriores
+      cell.classList.remove(
+        'hint-top',
+        'hint-full',
+        'hint-bottom',
+        'hint-left',
+        'hint-center',
+        'hint-right'
+      );
 
-      // Limpiar primero cualquier hint viejo
-cell.classList.remove(
-  'hint-top','hint-full','hint-bottom',
-  'hint-left','hint-center','hint-right'
-);
+      // Añadir nuevos
+      if (vpos === 'top') cell.classList.add('hint-top');
+      if (vpos === 'full') cell.classList.add('hint-full');
+      if (vpos === 'bottom') cell.classList.add('hint-bottom');
 
-// Añadir vertical
-if (vpos === 'top')    cell.classList.add('hint-top');
-if (vpos === 'full')   cell.classList.add('hint-full');
-if (vpos === 'bottom') cell.classList.add('hint-bottom');
-
-// Añadir horizontal
-if (hpos === 'left')   cell.classList.add('hint-left');
-if (hpos === 'single') cell.classList.add('hint-center');
-if (hpos === 'right')  cell.classList.add('hint-right');
-
+      if (hpos === 'left') cell.classList.add('hint-left');
+      if (hpos === 'single') cell.classList.add('hint-center');
+      if (hpos === 'right') cell.classList.add('hint-right');
     });
 
-    cell.addEventListener('dragleave', ()=> clearHints(cell));
+    cell.addEventListener('dragleave', () => clearHints(cell));
 
-    cell.addEventListener('drop', async (ev)=>{
+    cell.addEventListener('drop', async ev => {
       ev.preventDefault();
-      const courseId = ev.dataTransfer.getData('text/plain');
-      if (!courseId) return;
+      const raw = ev.dataTransfer.getData('text/plain');
+      if (!raw) return;
+
+      const day = parseInt(cell.dataset.day, 10);
+      const slot = parseInt(cell.dataset.slot, 10);
+      const pos = cell.dataset.droppos || 'full';
+      const hpos = cell.dataset.droph || 'single';
+
+      let moveData = null;
+      try {
+        moveData = JSON.parse(raw);
+      } catch (_) {}
+
+      // 🟩 mover bloque existente
+      if (moveData && moveData.type === 'move-block') {
+        const blkId = moveData.id;
+        const rec = items.find(x => x.id === blkId);
+        if (!rec) return;
+
+        if (!state.currentUser || !state.activeSemesterId) {
+          alert('Selecciona un semestre activo antes de mover bloques.');
+          clearHints(cell);
+          return;
+        }
+
+        try {
+          const ref = doc(
+            db,
+            'users',
+            state.currentUser.uid,
+            'semesters',
+            state.activeSemesterId,
+            'schedule',
+            blkId
+          );
+
+          const def = getMySlots()[slot];
+          await updateDoc(ref, {
+            day,
+            slot,
+            pos,
+            hpos,
+            start: def.start,
+            end: def.end,
+            updatedAt: Date.now()
+          });
+
+          const idx = items.findIndex(x => x.id === blkId);
+          if (idx >= 0)
+            Object.assign(items[idx], {
+              day,
+              slot,
+              pos,
+              hpos,
+              start: def.start,
+              end: def.end
+            });
+          renderGrid();
+        } catch (err) {
+          console.error('move error', err);
+          alert(
+            'No se pudo mover el bloque (error Firestore): ' +
+              (err?.message || err)
+          );
+        }
+
+        clearHints(cell);
+        return;
+      }
+
+      // 🔹 nuevo chip
+      const courseId = raw;
       if (!state.currentUser || !state.activeSemesterId) {
-        alert('Selecciona un semestre.'); clearHints(cell); return;
+        alert('Selecciona un semestre.');
+        clearHints(cell);
+        return;
       }
 
-      const day  = parseInt(cell.dataset.day,10);
-      const slot = parseInt(cell.dataset.slot,10);
-      const pos  = cell.dataset.droppos || 'full';
-      let   hpos = cell.dataset.droph  || 'single';
+      const hereAll = items.filter(it => it.day === day && it.slot === slot);
+      const hereAtPos = hereAll.filter(it => (it.pos || 'full') === pos);
 
-      const hereAll   = items.filter(it => it.day===day && it.slot===slot);
-      const hereAtPos = hereAll.filter(it => (it.pos||'full') === pos);
-
-      // Ya hay dos en este pos → no cabe otro
-      if (hereAtPos.length >= 2){
-        alert('Esta zona ya tiene dos ramos (izq/der).'); clearHints(cell); return;
+      if (hereAtPos.length >= 2) {
+        alert('Esta zona ya tiene dos ramos (izq/der).');
+        clearHints(cell);
+        return;
       }
 
-      if (hereAtPos.length === 1){
-  const existing = hereAtPos[0];
-  const eH = existing.hpos || 'single';
+      if (hereAtPos.length === 1) {
+        const existing = hereAtPos[0];
+        const eH = existing.hpos || 'single';
+        if (pos === 'full' && hpos === 'single') {
+          alert('Ya hay un ramo aquí. Elige izquierda o derecha.');
+          clearHints(cell);
+          return;
+        }
 
-  // ⚡ solo bloquea si es FULL y ya hay alguien
-  if (pos === 'full' && hpos === 'single'){
-    alert('Ya hay un ramo aquí. Elige izquierda o derecha.');
-    clearHints(cell); 
-    return;
-  }
-
-        if (eH === 'single'){
-          // Convertimos el existente al lado opuesto del que pediste
-          const oldSide = (hpos === 'left') ? 'right' : 'left';
+        if (eH === 'single') {
+          const oldSide = hpos === 'left' ? 'right' : 'left';
           try {
-            await updateDoc(doc(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule', existing.id), { hpos: oldSide });
-          } catch(_){}
-          // y el nuevo queda en el lado que eligiste (hpos)
-        } else {
-          if (eH === hpos){
-            alert('Ese lado ya está ocupado. Prueba el otro lado.');
-            clearHints(cell); return;
-          }
-          // si es el lado opuesto, seguimos normal
+            await updateDoc(
+              doc(
+                db,
+                'users',
+                state.currentUser.uid,
+                'semesters',
+                state.activeSemesterId,
+                'schedule',
+                existing.id
+              ),
+              { hpos: oldSide }
+            );
+          } catch (_) {}
+        } else if (eH === hpos) {
+          alert('Ese lado ya está ocupado. Prueba el otro lado.');
+          clearHints(cell);
+          return;
         }
       }
 
-      const SLOTS = getMySlots();
-      const def = SLOTS[slot];
-      const payload = { courseId, day, slot, start: def.start, end: def.end, pos, hpos, createdAt: Date.now() };
-      const ref = collection(db,'users',state.currentUser.uid,'semesters',state.activeSemesterId,'schedule');
-      await addDoc(ref, payload);
+      const def = getMySlots()[slot];
+      await addDoc(
+        collection(
+          db,
+          'users',
+          state.currentUser.uid,
+          'semesters',
+          state.activeSemesterId,
+          'schedule'
+        ),
+        {
+          courseId,
+          day,
+          slot,
+          start: def.start,
+          end: def.end,
+          pos,
+          hpos,
+          createdAt: Date.now()
+        }
+      );
 
       clearHints(cell);
     });
   });
 }
 
-function clearHints(cell){
-  cell.classList.remove('over','hint-top','hint-full','hint-bottom',
-                        'hint-left','hint-center','hint-right');
+function clearHints(cell) {
+  cell.classList.remove(
+    'over',
+    'hint-top',
+    'hint-full',
+    'hint-bottom',
+    'hint-left',
+    'hint-center',
+    'hint-right'
+  );
   delete cell.dataset.droppos;
   delete cell.dataset.droph;
 }
+
 
 /* ==================== VISTA COMPARTIDA ==================== */
 let unsubShared = null;
@@ -897,6 +1060,49 @@ async function populateSharedSemesters(){
   }
 }
 
+async function autoSelectPartnerSemesterForSchedule(){
+  if (!state.pairOtherUid) return;
+  const activeLabel = state.activeSemesterData?.label || null;
+  if (!activeLabel) return;
+
+  try {
+    const ref = collection(db, 'users', state.pairOtherUid, 'semesters');
+    const snap = await getDocs(ref);
+
+    let match = null;
+    snap.forEach(d => {
+      const lbl = (d.data()?.label || '').trim();
+      if (lbl === activeLabel) match = { id: d.id, label: lbl };
+    });
+
+    if (match) {
+      state.shared = state.shared || {};
+      state.shared.horario = state.shared.horario || {};
+
+      if (state.shared.horario.semId !== match.id) {
+        state.shared.horario.semId = match.id;
+
+        // Refleja select si existe
+        const sel = $('sh-semSel');
+        if (sel) {
+          sel.innerHTML = `<option selected>${match.label}</option>`;
+          sel.disabled = true;
+          sel.style.pointerEvents = 'none';
+          sel.style.opacity = '0.7';
+        }
+
+        // 🔗 Suscripción real al horario del dúo
+        await subscribeShared(match.id);
+        // Si tienes vista combinada, redibújala
+        if (document.getElementById('horarioCombinado')) renderCombinedTimeline();
+      }
+    }
+  } catch (err) {
+    console.warn('autoSelectPartnerSemesterForSchedule', err);
+  }
+}
+
+
 /* ===== Guardar / actualizar bloque ===== */
 
 export async function setRoom({ course, day, slot, room }) {
@@ -976,3 +1182,106 @@ export async function removeBlock(blockId, semId = null) {
   await deleteDoc(doc(db, 'users', state.currentUser.uid, 'semesters', sid, 'schedule', blockId));
   return { ok: true };
 }
+
+document.addEventListener('dragstart', e => {
+  const blk = e.target.closest('.placed');
+  if (blk) blk.classList.add('dragging');
+});
+document.addEventListener('dragend', e => {
+  const blk = e.target.closest('.placed');
+  if (blk) blk.classList.remove('dragging');
+});
+
+/* ==================== NUEVA VISTA: HORARIO COMBINADO ==================== */
+const DAY_START = 8 * 60;  // 08:00
+const DAY_END = 22 * 60;   // 22:00
+
+function toMinutes(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function percentFromMinute(min) {
+  return ((min - DAY_START) / (DAY_END - DAY_START)) * 100;
+}
+
+function renderCombinedTimeline() {
+  const host = $('horarioCombinado');
+  if (!host) return;
+
+  // Crear contenedor
+  host.innerHTML = `
+    <div class="timeline">
+      <div class="timeline-hours">
+        ${Array.from({length: 15}, (_,i) => {
+          const h = 8 + i;
+          return `<div class="timeline-hour">${h}:00</div>`;
+        }).join('')}
+      </div>
+      ${DAYS.map((d, idx) => `
+        <div class="timeline-day" data-day="${idx}" title="${d}">
+          ${renderBlocksForDay(idx)}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderBlocksForDay(dayIndex) {
+  // Combinar tus bloques + los del dúo
+  const all = [
+    ...(items || []).map(b => ({...b, isMine: true})),
+    ...(sharedItems || []).map(b => ({...b, isMine: false}))
+  ];
+
+  const dayBlocks = all.filter(b => b.day === dayIndex);
+  return dayBlocks.map(b => {
+    const start = toMinutes(b.start);
+    const end = toMinutes(b.end);
+    const top = percentFromMinute(start);
+    const height = percentFromMinute(end) - top;
+
+    const courseArr = b.isMine ? state.courses : sharedCourses;
+    const color = getCourseColorById(courseArr, b.courseId, b.isMine ? myColor : partnerColor);
+    const text = bestText(color);
+    const course = courseArr.find(c => c.id === b.courseId);
+    const shown = (b.displayName || course?.name || 'Ramo');
+    const room = b.room ? ` (${b.room})` : '';
+
+    const opacity = b.isMine ? 1 : 0.6;
+
+    return `
+      <div class="timeline-block"
+           style="top:${top}%;height:${height}%;
+                  background:${color};opacity:${opacity};color:${text};">
+        ${shown}${room}
+      </div>
+    `;
+  }).join('');
+}
+
+/* === Subtab extra === */
+document.addEventListener('DOMContentLoaded', () => {
+  const tabCombinado = $('subtabCombinado');
+  const tabComp = $('subtabCompartido');
+  const tabProp = $('subtabPropio');
+  const pageCombinado = $('horarioCombinado');
+  const pageComp = $('horarioCompartido');
+  const pageProp = $('horarioPropio');
+
+  if (tabCombinado) {
+    tabCombinado.classList.remove('hidden');
+
+    tabCombinado.addEventListener('click', () => {
+      tabProp?.classList.remove('active');
+      tabComp?.classList.remove('active');
+      tabCombinado.classList.add('active');
+
+      pageProp?.classList.add('hidden');
+      pageComp?.classList.add('hidden');
+      pageCombinado?.classList.remove('hidden');
+
+      renderCombinedTimeline();
+    });
+  }
+});

@@ -197,7 +197,7 @@ if (signOutBtn) {
         listenProfile();                 // escucha cambios del perfil
         await loadMyPair();              // intenta cargar pair existente (si lo hay)
         reflectProfileInSemestersUI();   // habilita crear semestre si hay universidad
-        // tarjeta con el perfil de la pareja (si existe)
+        // tarjeta con el perfil de la duo (si existe)
         import('./profile.js').then(m => m.mountPartnerProfileCard?.()).catch(()=>{});
       } catch (e) {
         console.error('profile/pair init failed:', e);

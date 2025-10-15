@@ -10,7 +10,7 @@ export const state = {
   unsubscribeCourses: null,
   editingCourseId: null,
 
-  // UID de la pareja 
+  // UID de tu duo 
   pairOtherUid: null,
 
   // Estado para vistas compartidas 
