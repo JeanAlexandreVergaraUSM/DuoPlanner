@@ -5,6 +5,12 @@ Permite gestionar semestres, notas, asistencia, horarios, progreso y trabajar en
 
 ---
 
+## 🌐 Demo en línea
+
+👉 [Abrir DuoPlanner](https://jeanalexandrevergarausm.github.io/DuoPlanner)
+
+---
+
 ## 🧠 Descripción general
 
 DuoPlanner combina herramientas de planificación académica, análisis de progreso y colaboración social.  
