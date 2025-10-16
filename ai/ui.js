@@ -15,7 +15,7 @@ function ensurePanel() {
   if (document.getElementById(PANEL_ID)) return;
 
   // Botón flotante 🤖
-  const btn = document.createElement('button');
+  //const btn = document.createElement('button');
   btn.id = 'dp-ai-button';
   Object.assign(btn.style, {
     position: 'fixed',
