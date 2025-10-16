@@ -717,7 +717,7 @@ function setupPartnerToggle(){
   bar.innerHTML = `
     <label class="pill">
       <input type="checkbox" id="malla-view-partner" style="margin-right:8px"/>
-      Ver malla de la otra persona (solo lectura)
+      Ver malla de la otra persona
     </label>
   `;
   host.prepend(bar);
