@@ -15,7 +15,7 @@ function ensurePanel() {
   if (document.getElementById(PANEL_ID)) return;
 
   // Botón flotante 🤖
-  //const btn = document.createElement('button');
+ /* const btn = document.createElement('button');
   btn.id = 'dp-ai-button';
   Object.assign(btn.style, {
     position: 'fixed',
@@ -33,7 +33,7 @@ function ensurePanel() {
     zIndex: '1000'
   });
   btn.textContent = '🤖';
-  document.body.appendChild(btn);
+  document.body.appendChild(btn);*/
 
   // Panel
   const panel = document.createElement('div');
