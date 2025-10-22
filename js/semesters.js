@@ -97,6 +97,43 @@ export async function refreshSemestersSub() {
   }
   if (!state.currentUser) return;
 
+    // 🟡 Bloqueo contextual: si el perfil no tiene universidad o carrera
+  const uni = state.profileData?.university?.trim() || '';
+  const career = state.profileData?.career?.trim() || '';
+
+  const list = $('semestersList');
+  if (!uni || !career) {
+    if (list) {
+      list.innerHTML = `
+        <div class="card" style="padding:20px; text-align:center;">
+          <h3>⚠️ Antes de agregar semestres necesitas configurar tu perfil</h3>
+          <p>Completa tu <b>universidad</b> y <b>carrera</b> para poder crear y visualizar semestres.</p>
+          <button id="goToProfileBtn" class="btn-primary" style="margin-top:10px;">
+            Ir a Perfil ahora →
+          </button>
+        </div>
+      `;
+
+      // 🔗 Redirigir al tab Perfil al hacer clic
+      $('goToProfileBtn')?.addEventListener('click', () => {
+        const tabPerfil = $('subtabPerfil') || document.querySelector('[data-tab="perfil"]');
+        const pagePerfil = $('perfilContainer') || document.getElementById('perfilContainer');
+
+        if (tabPerfil && pagePerfil) {
+          document.querySelectorAll('.subtab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+
+          tabPerfil.classList.add('active');
+          pagePerfil.classList.remove('hidden');
+        }
+      });
+    }
+
+    // 🚪 Detener la función (no seguir con Firestore)
+    return;
+  }
+
+
   const uid = state.currentUser.uid;
 
   // 🔹 1. Cargar el semestre activo guardado en Firestore

@@ -400,13 +400,14 @@ async function subscribeShared(semId){
 /* ================= Modal (Propio) ================= */
 function mountModal() {
   if ($('calModal')) return;
+
   const wrapper = document.createElement('div');
   wrapper.id = 'calModal';
   wrapper.className = 'modal';
   wrapper.innerHTML = `
     <div class="modal-backdrop" id="calModalBackdrop"></div>
     <div class="modal-content">
-      <h3 style="margin-top:0">Nuevo evento</h3>
+      <h3 id="calModalTitle" style="margin-top:0">Nuevo evento</h3>
 
       <div class="row" style="gap:10px">
         <div style="flex:1">
@@ -439,7 +440,6 @@ function mountModal() {
         </div>
       </div>
 
-      <!-- 🔹 NUEVO BLOQUE -->
       <div class="row" style="gap:10px; margin-top:8px">
         <div style="flex:1">
           <label>Repetir cada</label>
@@ -458,7 +458,6 @@ function mountModal() {
           </select>
         </div>
       </div>
-      <!-- 🔹 FIN BLOQUE NUEVO -->
 
       <div class="row" style="justify-content:flex-end; gap:10px; margin-top:16px">
         <button class="ghost" id="calEvtCancel">Cancelar</button>
@@ -472,7 +471,7 @@ function mountModal() {
   $('calModalBackdrop').addEventListener('click', close);
   $('calEvtCancel').addEventListener('click', close);
 
-  // 🔹 Guardar con repetición/persistencia
+  // 🔹 Guardar evento (nuevo o editado)
   $('calEvtSave').addEventListener('click', async () => {
     if (!state.currentUser || !state.activeSemesterId) {
       alert('Primero activa un semestre en la pestaña "Semestres".');
@@ -491,24 +490,40 @@ function mountModal() {
     if (!title) return alert('Ingresa un título.');
     if (!date) return alert('Selecciona una fecha.');
 
-    try {
-      const ref = collection(db, 'users', state.currentUser.uid,
-        'semesters', state.activeSemesterId, 'calendar');
+    const editingId = wrapper.dataset.editingId || null;
+    const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'calendar');
 
-      await addDoc(ref, {
-        title, date, start, end, courseId, color,
-        repeat: repeat ? { every: repeat, interval: 1 } : null,
-        persistent,
-        createdAt: Date.now()
-      });
+    try {
+      if (editingId) {
+        // ✏️ Modo edición
+        await updateDoc(doc(ref, editingId), {
+          title, date, start, end, courseId, color,
+          repeat: repeat ? { every: repeat, interval: 1 } : null,
+          persistent,
+          updatedAt: Date.now()
+        });
+        console.log('[Calendar] Evento actualizado:', title);
+      } else {
+        // ➕ Nuevo evento
+        await addDoc(ref, {
+          title, date, start, end, courseId, color,
+          repeat: repeat ? { every: repeat, interval: 1 } : null,
+          persistent,
+          createdAt: Date.now()
+        });
+        console.log('[Calendar] Evento creado:', title);
+      }
 
       close();
     } catch (err) {
       console.error(err);
       alert('No se pudo guardar el evento.');
+    } finally {
+      wrapper.dataset.editingId = '';
     }
   });
 }
+
 
 
 function openModalFor(dateStr){
@@ -563,6 +578,43 @@ function buildMonthGrid(){
 
   paintEvents();
 }
+
+function openModalForEdit(ev) {
+  if (!state.currentUser || !state.activeSemesterId) {
+    alert('Primero activa un semestre en la pestaña "Semestres".'); return;
+  }
+  mountModal();
+
+  const modal = $('calModal');
+  const titleEl = $('calModalTitle');
+  const saveBtn = $('calEvtSave');
+  modal.dataset.editingId = ev.id; // <- guardamos el ID a editar
+
+  // Cambiar textos
+  titleEl.textContent = 'Editar evento';
+  saveBtn.textContent = 'Guardar cambios';
+
+  // Precargar valores
+  $('calEvtTitle').value = ev.title || '';
+  $('calEvtDate').value = ev.date || '';
+  $('calEvtStart').value = ev.start || '';
+  $('calEvtEnd').value = ev.end || '';
+  $('calEvtRepeat').value = ev.repeat?.every || '';
+  $('calEvtPersistent').value = ev.persistent ? 'true' : '';
+
+  const sel = $('calEvtCourse');
+  sel.innerHTML = `<option value="">(Sin asignar)</option>`;
+  (state.courses || []).forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    if (c.id === ev.courseId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  modal.classList.add('active');
+}
+
 
 /* ================= Construcción del mes – COMPARTIDO ================= */
 function buildSharedMonthGrid(){
@@ -719,26 +771,51 @@ function paintEvents() {
     const time = (ev.start && ev.end) ? `${ev.start}–${ev.end} · ` :
       (ev.start ? `${ev.start} · ` : '');
 
+    // 🔹 contenedor del evento
     const chip = document.createElement('div');
     chip.className = 'cal-evt';
-    chip.textContent = `${time}${ev.title || '(sin título)'}`;
-    chip.title = 'Eliminar';
     chip.style.background = color;
     chip.style.color = text;
     chip.style.border = '1px solid rgba(0,0,0,0.25)';
+    chip.style.position = 'relative';
+    chip.style.cursor = 'pointer';
 
-    chip.addEventListener('click', async (e) => {
+    // 🔹 texto principal
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = `${time}${ev.title || '(sin título)'}`;
+    chip.appendChild(titleSpan);
+
+    // 🔹 botón eliminar (X)
+    const delBtn = document.createElement('span');
+    delBtn.textContent = '✕';
+    delBtn.className = 'cal-del';
+    delBtn.title = 'Eliminar evento';
+    delBtn.style.position = 'absolute';
+    delBtn.style.top = '2px';
+    delBtn.style.right = '4px';
+    delBtn.style.fontWeight = 'bold';
+    delBtn.style.color = '#fff8';
+    delBtn.style.cursor = 'pointer';
+    delBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!state.currentUser || !state.activeSemesterId || !ev.id) return;
-      if (!confirm('¿Eliminar este evento?')) return;
+      if (!confirm(`¿Eliminar evento "${ev.title}"?`)) return;
       try {
         await deleteDoc(doc(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'calendar', ev.id));
       } catch (err) { console.error(err); }
     });
+    chip.appendChild(delBtn);
+
+    // 🔹 click sobre el chip → editar título
+    chip.addEventListener('click', (e) => {
+  e.stopPropagation();
+  openModalForEdit(ev);
+});
 
     cont.appendChild(chip);
   });
 }
+
 
 
 /* ================= Pintado – COMPARTIDO ================= */

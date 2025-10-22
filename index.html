@@ -1278,6 +1278,34 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
 }
 
+.cal-evt {
+  position: relative;
+  border-radius: 6px;
+  margin: 2px 0;
+  padding: 4px 6px;
+  font-size: 0.85rem;
+  transition: transform 0.1s ease;
+}
+
+.cal-evt:hover {
+  transform: scale(1.02);
+}
+
+.cal-evt .cal-del:hover {
+  color: red !important;
+}
+
+.grade-item.dragging {
+  opacity: 0.7;
+  transform: scale(1.03);
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px dashed var(--primary);
+}
+
+.grade-item {
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
 
 /*termina*/
 
@@ -1619,7 +1647,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 
     <div style="display:flex;gap:.5rem;margin-top:1rem;">
-      <button id="gr-addEvalBtn" class="btn">Agregar evaluación</button>
+      <button id="gr-addEvalBtn" class="primary">Agregar evaluación</button>
       <button id="gr-cancelEvalBtn" class="btn btn-secondary hidden">Cancelar</button>
     </div>
   </div>
@@ -1633,7 +1661,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     <input id="gr-finalExpr" type="text"
            placeholder='Ej: C1*100% + C2*50% + T1*50%' />
     <small class="muted">
-      Usa +, −, ×, ÷, paréntesis y % (p. ej. 20% = 0.2).  
+      Usa +, −, *, /, paréntesis y % (p. ej. 20% = 0.2).  
       Los códigos son los que defines en cada evaluación (C1, T1, P1…).  
       También puedes usar la <b>nota final de otros ramos</b> con:
       <code>final("Nombre del ramo")</code> o  

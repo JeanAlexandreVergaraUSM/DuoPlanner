@@ -515,10 +515,35 @@ async function watchComponents() {
   const ref = componentsColRef();
 
   unsubComp = onSnapshot(
-    query(ref, orderBy('createdAt', 'asc')),
+    query(ref, orderBy('createdAt', 'asc')), // puedes dejar createdAt; abajo re-ordenamos
     async (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      components = list;                 
+      let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 1) asigna order si falta (sólo una vez, con writes batch)
+      const needsOrder = list.filter(x => typeof x.order !== 'number');
+      if (needsOrder.length) {
+        const { writeBatch } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        const batch = writeBatch(db);
+        // base: orden por createdAt y posición
+        const base = Date.now();
+        needsOrder.forEach((item, i) => {
+          batch.update(doc(componentsColRef(), item.id), { order: base + i });
+        });
+        try { await batch.commit(); } catch (_) {}
+        // re-leer snapshot en próximo tick; seguimos con list actual
+      }
+
+      // 2) ordenar por order asc (fallback: createdAt)
+      list.sort((a, b) => {
+        const ao = (typeof a.order === 'number') ? a.order : 9e15;
+        const bo = (typeof b.order === 'number') ? b.order : 9e15;
+        if (ao !== bo) return ao - bo;
+        const at = a.createdAt?.toMillis?.() ?? 0;
+        const bt = b.createdAt?.toMillis?.() ?? 0;
+        return at - bt;
+      });
+
+      components = list;
       await renderComponents(list);
       computeAndRender();
       rebuildCrossFinals().then(() => computeAndRender());
@@ -529,6 +554,7 @@ async function watchComponents() {
     }
   );
 }
+
 
 
 
@@ -567,7 +593,8 @@ async function addEvalFromForm(){
     key,
     name,
     score,
-    createdAt: serverTimestamp()
+    createdAt: serverTimestamp(),
+    order: Date.now()
   });
 
   // limpiar formulario
@@ -756,19 +783,24 @@ async function renderComponents(list = []) {
     items.forEach(c => {
       const card = document.createElement('div');
       card.className = 'grade-item';
+      card.setAttribute('draggable', 'true');     // 👈 arrastrable
+  card.dataset.id = c.id; 
+  card.draggable = true;  
       card.innerHTML = `
-        <div style="flex:1">
-          <div style="font-weight:700">${esc(c.name || c.key)}</div>
-          <div class="muted">Código: <code>${esc(c.key)}</code></div>
-        </div>
-        <div style="display:flex;align-items:center;gap:.5rem">
-          <input data-f="score" type="number" step="${step}" min="${min}" max="${max}" 
-                 value="${localValues[c.key] ?? c.score ?? ''}"
- style="width:110px"/>
-          <button data-act="save" class="btn btn-secondary">Guardar</button>
-          <button data-act="del"  class="btn btn-secondary">Eliminar</button>
-        </div>
-      `;
+  <div style="flex:1">
+    <div class="gr-name" style="font-weight:700">${esc(c.name || c.key)}</div>
+    <div class="muted">Código: <code class="gr-code">${esc(c.key)}</code></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <input data-f="score" type="number" step="${step}" min="${min}" max="${max}"
+           value="${localValues[c.key] ?? c.score ?? ''}" style="width:110px"/>
+    <button data-act="save" class="btn btn-secondary">Guardar</button>
+    <button data-act="edit" class="btn btn-secondary">Editar</button>
+    <button data-act="cancelEdit" class="btn btn-secondary" style="display:none">Cancelar</button>
+    <button data-act="del"  class="btn btn-secondary">Eliminar</button>
+  </div>
+`;
+
 
       card.addEventListener('click', async (e) => {
         const t = e.target;
@@ -789,12 +821,126 @@ async function renderComponents(list = []) {
           await deleteDoc(doc(componentsColRef(), c.id));
         }
       });
+    
+
+card.addEventListener('click', async (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+
+  // ======= EDITAR =======
+  if (t.dataset.act === 'edit') {
+    // Cambia la UI a inputs
+    const nameEl = card.querySelector('.gr-name');
+    const codeEl = card.querySelector('.gr-code');
+
+    const nameVal = nameEl?.textContent?.trim() || c.name || '';
+    const codeVal = codeEl?.textContent?.trim() || c.key || '';
+
+    nameEl.innerHTML = `<input data-f="edit-name" type="text" value="${esc(nameVal)}"
+                         style="width:100%;max-width:320px">`;
+    codeEl.parentElement.innerHTML =
+      `Código: <input data-f="edit-code" type="text" value="${esc(codeVal)}"
+                      style="width:120px">`;
+
+    // Mostrar/ocultar botones
+    card.querySelector('[data-act="edit"]').style.display = 'none';
+    card.querySelector('[data-act="cancelEdit"]').style.display = '';
+    return;
+  }
+
+  // ======= CANCELAR EDICIÓN =======
+  if (t.dataset.act === 'cancelEdit') {
+    renderComponents(components); // re-render limpio
+    return;
+  }
+
+  // ======= GUARDAR NOTA =======
+  if (t.dataset.act === 'save') {
+    // si estamos en modo edición de nombre/código, guarda esos cambios
+    const nameInp = card.querySelector('[data-f="edit-name"]');
+    const codeInp = card.querySelector('[data-f="edit-code"]');
+
+    if (nameInp || codeInp) {
+      const newNameRaw = nameInp ? nameInp.value : (c.name || c.key);
+      const newCodeRaw = codeInp ? codeInp.value : c.key;
+
+      const newName = (newNameRaw || '').trim();
+      let newKey = (newCodeRaw || '').trim();
+
+      if (!newName) { alert('Escribe un nombre.'); return; }
+      newKey = sanitizeKey(newKey);
+      if (!newKey) { alert('Código inválido. Usa A–Z, 0–9 o _.'); return; }
+
+      // Unicidad (excluye la propia)
+      const taken = new Set(components.filter(x => x.id !== c.id)
+                           .map(x => (x.key || '').toLowerCase()));
+      if (taken.has(newKey.toLowerCase())) {
+        alert(`El código ${newKey} ya existe en este ramo.`);
+        return;
+      }
+
+      // Persistir cambios
+      const ref = doc(componentsColRef(), c.id);
+      const ops = [{ ref, data: { name: newName, key: newKey } }];
+
+      // Si cambió la key → actualizar fórmula y reglas
+      if (newKey !== c.key) {
+        const newExpr = replaceTokenWord(header.finalExpr || '', c.key, newKey);
+        const newRules = replaceTokenWord(header.rulesText || '', c.key, newKey);
+        await updateDoc(gradingDocRef(), {
+          finalExpr: newExpr || null,
+          rulesText: newRules || null
+        });
+        header.finalExpr = newExpr || '';
+        header.rulesText = newRules || '';
+      }
+
+      await updateDoc(ref, { name: newName, key: newKey });
+      // Re-calcular y re-render
+      await rebuildCrossFinals();
+      computeAndRender();
+      renderComponents(components);
+      return;
+    }
+
+    // guardar SOLO la nota (lo que ya tenías)
+    const inp = card.querySelector('[data-f="score"]');
+    let v = parseFloat(inp.value);
+    const score = isNaN(v) ? null : clamp(v, min, max);
+    await updateDoc(doc(componentsColRef(), c.id), { score });
+    t.textContent = 'Guardado ✓';
+    computeAndRender();
+    setTimeout(() => t.textContent = 'Guardar', 1200);
+    return;
+  }
+
+  // ======= ELIMINAR =======
+  if (t.dataset.act === 'del') {
+    if (!confirm(`Eliminar “${c.name || c.key}”?`)) return;
+    await deleteDoc(doc(componentsColRef(), c.id));
+    return;
+  }
+});
+
 
       groupContainer.appendChild(card);
     });
 
+    function replaceTokenWord(text, from, to) {
+  if (!text) return text;
+  const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${escRe(from)}\\b`, 'g');
+  return text.replace(re, to);
+}
+
+// (ya tienes sanitizeKey, la usamos arriba)
+
+
     details.appendChild(groupContainer);
     host.appendChild(details);
+
+    enableDnDForGrades(groupContainer);
+
 
     // 🔹 Renombrar grupo
     editBtn.addEventListener('click', async (e) => {
@@ -812,6 +958,7 @@ async function renderComponents(list = []) {
       }
     });
   }
+
 }
 
 
@@ -1128,6 +1275,87 @@ function renderResult(res){
 
 
 /* =================== Helpers =================== */
+/* =======================================================
+   DRAG & DROP – Reordenar evaluaciones (sin pérdida)
+   ======================================================= */
+let _dragState = { id: null, fromIndex: -1 };
+
+export function enableDnDForGrades(host) {
+  if (!host) return;
+
+  host.querySelectorAll('.grade-item').forEach(el => {
+    el.draggable = true;
+    // Evitar que inputs o botones interrumpan el drag
+    el.querySelectorAll('input,button,select,textarea').forEach(x => {
+      x.setAttribute('draggable', 'false');
+    });
+  });
+
+  host.addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.grade-item');
+    if (!item) return;
+
+    // 🔹 Estas dos líneas son esenciales para que NO aparezca el símbolo prohibido
+    e.dataTransfer.setData('text/plain', item.dataset.id || ''); 
+    e.dataTransfer.effectAllowed = 'move';
+
+    item.classList.add('dragging');
+    _dragState.id = item.dataset.id;
+    _dragState.fromIndex = [...host.children].indexOf(item);
+  });
+
+  host.addEventListener('dragend', () => {
+    const dragging = host.querySelector('.grade-item.dragging');
+    dragging?.classList.remove('dragging');
+    _dragState = { id: null, fromIndex: -1 };
+  });
+
+  // 🔹 dragover debe prevenir y establecer dropEffect
+  host.addEventListener('dragover', (e) => {
+    e.preventDefault();                    // 👈 permite el drop
+    e.dataTransfer.dropEffect = 'move';    // 👈 muestra el cursor correcto
+    const dragging = host.querySelector('.grade-item.dragging');
+    if (!dragging) return;
+    const after = getDragAfterElement(host, e.clientY);
+    if (after == null) host.appendChild(dragging);
+    else host.insertBefore(dragging, after);
+  }, { capture: true });
+
+  host.addEventListener('drop', async (e) => {
+    e.preventDefault(); // 👈 imprescindible
+    const ids = [...host.querySelectorAll('.grade-item')].map(el => el.dataset.id);
+    await persistNewOrder(ids);
+  });
+}
+
+function getDragAfterElement(container, y) {
+  const els = [...container.querySelectorAll('.grade-item:not(.dragging)')];
+  return els.reduce((closest, child) => {
+    const box = child.getBoundingClientRect();
+    const offset = y - (box.top + box.height / 2);
+    if (offset < 0 && offset > closest.offset) {
+      return { offset, element: child };
+    } else {
+      return closest;
+    }
+  }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+// 🔹 Guarda el nuevo orden en Firestore (sin eliminar nada)
+async function persistNewOrder(ids) {
+  if (!readyPath() || !Array.isArray(ids) || !ids.length) return;
+  const { writeBatch } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const batch = writeBatch(db);
+  let base = Date.now();
+  const step = 1000;
+  ids.forEach((id, i) => {
+    const ref = doc(componentsColRef(), id);
+    batch.update(ref, { order: base + i * step });
+  });
+  try { await batch.commit(); }
+  catch (err) { console.warn('Error al guardar orden:', err); }
+}
+
 
 // ====== SIMULADOR: helpers ======
 // Reemplaza la versión anterior
@@ -1664,10 +1892,11 @@ function gr_openSimDrawer({ formula, evals }) {
       <div id="gr-simRules" class="muted">—</div>
     </div>
 
-    <div style="position:fixed; right:16px; bottom:16px; display:flex; gap:8px;">
-      <button id="gr-simSave" class="primary">Guardar simulación</button>
-      <button id="gr-simClose" class="ghost">Salir</button>
-    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px; padding-top:12px; border-top:1px solid rgba(255,255,255,.1)">
+  <button id="gr-simSave" class="primary">Guardar simulación</button>
+  <button id="gr-simClose" class="ghost">Salir</button>
+</div>
+
   `;
 
   // Inserta backdrop y drawer (orden importa)
@@ -1675,16 +1904,56 @@ function gr_openSimDrawer({ formula, evals }) {
   document.body.appendChild(drawer);
 
   // Cerrar (compartido por botón, ESC y click en backdrop)
-  const doClose = async () => {
-    const wants = confirm('¿Guardar esta simulación antes de salir?');
-    if (wants) {
-      const snap = recompute();
-      try { await gr_saveSimulation(snap.gradesMap, formula); } catch(_) {}
+const doClose = async () => {
+  const snap = recompute();
+  let last = null;
+
+  try {
+    last = await gr_loadLastSimulation();
+  } catch {
+    last = null;
+  }
+
+  // 🔹 Normalizador robusto: redondea números y convierte null/undefined → null
+  const normalizeObj = (obj = {}) => {
+    const res = {};
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (v == null || v === '') res[k.toUpperCase()] = null;
+      else if (typeof v === 'string' && v.trim() === '') res[k.toUpperCase()] = null;
+      else if (!isNaN(v)) res[k.toUpperCase()] = Math.round(Number(v) * 100) / 100;
+      else res[k.toUpperCase()] = v;
     }
-    backdrop.remove();
-    drawer.remove();
-    document.body.classList.remove('sim-lock');
+    return res;
   };
+
+  const sameMap = (a, b) => {
+    const A = normalizeObj(a);
+    const B = normalizeObj(b);
+    const allKeys = new Set([...Object.keys(A), ...Object.keys(B)]);
+    for (const k of allKeys) {
+      if ((A[k] ?? null) !== (B[k] ?? null)) return false;
+    }
+    return true;
+  };
+
+  const unchanged = sameMap(snap.gradesMap, last);
+
+  // 🔸 Solo preguntar si cambió algo
+  let wants = false;
+  if (!unchanged) {
+    wants = confirm('¿Guardar esta simulación antes de salir?');
+  }
+
+  if (wants) {
+    try { await gr_saveSimulation(snap.gradesMap, formula); } catch(_) {}
+  }
+
+  backdrop.remove();
+  drawer.remove();
+  document.body.classList.remove('sim-lock');
+};
+
+
 
   backdrop.addEventListener('click', doClose);
   drawer.addEventListener('keydown', (e) => {
@@ -1704,26 +1973,91 @@ function gr_openSimDrawer({ formula, evals }) {
   const allCodes       = [...new Set([...existingCodes, ...codesInFormula])];
 
  // --- NUEVO BLOQUE ---
-const rows = [];
+// --- NUEVO BLOQUE AGRUPADO ---
+const grupos = {
+  certamenes:  [],
+  controles:   [],
+  tareas:      [],
+  proyecto:    [],
+  evaluaciones: [],
+  experiencias: [],
+  preinformes:  [],
+  informes:     [],
+  laboratorios: [],
+  otros:        []
+};
 
+const defaultNames = {
+  certamenes:   'Certámenes',
+  controles:    'Controles',
+  tareas:       'Tareas',
+  proyecto:     'Proyecto',
+  evaluaciones: 'Evaluaciones',
+  experiencias: 'Experiencias',
+  preinformes:  'Pre-informes',
+  informes:     'Informes',
+  laboratorios: 'Laboratorios',
+  otros:        'Otros'
+};
+
+// 🧠 Determinar grupo según nombre/código
+function getGrupo(code, name) {
+  if (/^C\d*/i.test(code) || /certamen/i.test(name)) return 'certamenes';
+  if (/^Q\d*/i.test(code) || /control/i.test(name)) return 'controles';
+  if (/^T\d*/i.test(code) || /tarea/i.test(name)) return 'tareas';
+  if (/PF|PROY/i.test(code) || /proy/i.test(name)) return 'proyecto';
+  if (/evaluaci[oó]n/i.test(name)) return 'evaluaciones';
+  if (/experien/i.test(name)) return 'experiencias';
+  if (/pre[\s-]?informe/i.test(name)) return 'preinformes';
+  if (/\binforme/i.test(name) && !/pre[\s-]?informe/i.test(name)) return 'informes';
+  if (/^L\d*/i.test(code) || /laboratorio/i.test(name)) return 'laboratorios';
+  return 'otros';
+}
+
+
+// 🔹 Clasificar cada evaluación en su grupo
 for (const code of allCodes) {
   const ev = (evals || []).find(e => e.code === code) || { name: code };
   const val = existing.get(code);
-  const isMayor = (header.scale === 'MAYOR');
-  const min  = isMayor ? 1 : 0;
-  const max  = isMayor ? 7 : 100;
-  const step = isMayor ? 0.1 : 1;
-  const autoBadge = existingCodes.has(code) ? '' :
-    `<span class="muted" style="font-size:12px;margin-left:6px;opacity:.7">(auto)</span>`;
+  const groupKey = getGrupo(code, ev.name || code);
+  grupos[groupKey].push({
+    code, name: ev.name || code, value: val
+  });
+}
 
+// 🔹 Renderizado agrupado
+const rows = [];
+const isMayor = (header.scale === 'MAYOR');
+const min  = isMayor ? 1 : 0;
+const max  = isMayor ? 7 : 100;
+const step = isMayor ? 0.1 : 1;
+
+for (const [key, list] of Object.entries(grupos)) {
+  if (!list.length) continue;
+  const title = defaultNames[key] || key;
   rows.push(`
-    <div class="row" style="align-items:center;gap:8px;margin:6px 0" data-sim-code="${esc(code)}">
-      <div style="min-width:76px"><b>${esc(code)}</b>${autoBadge}</div>
-      <div style="flex:1">${esc(ev.name || code)}</div>
-      <input type="number" step="${step}" min="${min}" max="${max}" style="width:110px" placeholder="—" value="${val ?? ''}">
-    </div>
+    <details open class="sim-group" data-key="${key}"
+      style="margin-top:10px;border:1px solid rgba(255,255,255,.08);
+             border-radius:8px;padding:6px 8px;background:rgba(0,0,0,0.15)">
+      <summary style="cursor:pointer;font-weight:700;font-size:14px;
+                      margin-bottom:6px">${title} (${list.length})</summary>
+      <div class="sim-group-body">
+        ${list.map(ev => `
+          <div class="row" style="align-items:center;gap:8px;margin:4px 0"
+               data-sim-code="${esc(ev.code)}">
+            <div style="min-width:76px"><b>${esc(ev.code)}</b></div>
+            <div style="flex:1">${esc(ev.name)}</div>
+            <input type="number" step="${step}" min="${min}" max="${max}"
+                   style="width:110px" placeholder="—"
+                   value="${ev.value ?? ''}">
+          </div>
+        `).join('')}
+      </div>
+    </details>
   `);
 }
+
+formHost.innerHTML = rows.join('');
 
 // 🔹 Detección de referencias a otros ramos (finalCode / final)
 const matches = [...formula.matchAll(/finalCode\(["'](.+?)["']\)/g)];
