@@ -12,10 +12,11 @@ const PANEL_ID = 'dp-ai-panel';
 
 /* ---------------- Panel y Botón ---------------- */
 function ensurePanel() {
+  
   if (document.getElementById(PANEL_ID)) return;
 
-  // Botón flotante 🤖
- /* const btn = document.createElement('button');
+  /*// Botón flotante 🤖
+  const btn = document.createElement('button');
   btn.id = 'dp-ai-button';
   Object.assign(btn.style, {
     position: 'fixed',

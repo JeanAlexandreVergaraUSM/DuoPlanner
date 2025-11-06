@@ -179,43 +179,50 @@ if (signOutBtn) {
 
   // Suscripción al estado de autenticación
   onAuthStateChanged(auth, async (user) => {
-    state.currentUser = user || null;
-    setAuthLoading(false);
+  state.currentUser = user || null;
+  setAuthLoading(false);
 
-    if (user) {
-      showSignedIn(user.displayName || user.email || user.uid);
+  if (user) {
+    showSignedIn(user.displayName || user.email || user.uid);
 
-      // Asegura doc de usuario
-      try {
-        await ensureUserDoc(user);
-      } catch (e) {
-        console.error('ensureUserDoc failed:', e);
-      }
-
-      // Perfil + Pair
-      try {
-        listenProfile();                 // escucha cambios del perfil
-        await loadMyPair();              // intenta cargar pair existente (si lo hay)
-        reflectProfileInSemestersUI();   // habilita crear semestre si hay universidad
-        // tarjeta con el perfil de la duo (si existe)
-        import('./profile.js').then(m => m.mountPartnerProfileCard?.()).catch(()=>{});
-      } catch (e) {
-        console.error('profile/pair init failed:', e);
-      }
-
-      // Semestres
-      try {
-        refreshSemestersSub();           // lista/suscribe semestres del usuario
-      } catch (e) {
-        console.error('refreshSemestersSub failed:', e);
-      }
-
-      updateDebug();
-    } else {
-      showSignedOut();
-      updateDebug();
+    // 🔹 Asegura el documento del usuario (solo una vez)
+    try {
+      await ensureUserDoc(user);
+    } catch (e) {
+      console.error('ensureUserDoc failed:', e);
     }
-  });
+
+    // 🔹 Carga ligera primero (Perfil)
+    try {
+      listenProfile(); // escucha cambios del perfil (poco costo)
+      reflectProfileInSemestersUI();
+    } catch (e) {
+      console.error('profile listen failed:', e);
+    }
+
+    // 🔹 Retrasa los módulos más pesados (Pair y Semestres)
+    setTimeout(() => {
+      loadMyPair().catch(e => console.error('loadMyPair failed:', e));
+    }, 800);
+
+    setTimeout(() => {
+      refreshSemestersSub().catch(e => console.error('refreshSemestersSub failed:', e));
+    }, 1500);
+
+    // 🔹 Tarjeta de perfil del duo (solo si ya está todo montado)
+    setTimeout(() => {
+      import('./profile.js')
+        .then(m => m.mountPartnerProfileCard?.())
+        .catch(() => {});
+    }, 2500);
+
+    updateDebug();
+  } else {
+    showSignedOut();
+    updateDebug();
+  }
+});
+
 }
 
 async function ensureUserDoc(user) {

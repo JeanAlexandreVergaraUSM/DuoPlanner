@@ -122,34 +122,37 @@ function subscribeCourses(){
   const ref = collection(db, 'users', state.currentUser.uid, 'semesters', state.activeSemesterId, 'courses');
 
   // 🔸 Opción A (segura): sin orderBy en Firestore + orden local
-  unsubscribeCourses = onSnapshot(ref, (snap) => {
-    const list = snap.docs.map(d => {
-      const data = d.data() || {};
-      return {
-        id: d.id,
-        ...data,
-        // normaliza createdAt (puede llegar como Timestamp o ausente)
-        createdAtMs:
-          data.createdAt instanceof Timestamp ? data.createdAt.toMillis() :
-          typeof data.createdAt === 'number' ? data.createdAt :
-          0
-      };
-    });
+  // --- Agrega este helper antes de subscribeCourses (arriba en el archivo si no lo tienes) ---
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
 
-    // Ordena descendente por fecha
-    list.sort((a,b) => b.createdAtMs - a.createdAtMs);
-
-    state.courses = list;
-
-    // 🔍 debug útil para este problema
-    console.table(state.courses.map(c => ({
-      id: c.id, name: c.name, createdAtMs: c.createdAtMs
-    })));
-
-    renderCourses(snap);           // puedes dejarlo como está
-    gradesOnCourses?.();
-    document.dispatchEvent(new Event('courses:changed'));
+// --- Y luego reemplaza dentro de subscribeCourses() ---
+unsubscribeCourses = onSnapshot(ref, debounce((snap) => {
+  const list = snap.docs.map(d => {
+    const data = d.data() || {};
+    return {
+      id: d.id,
+      ...data,
+      createdAtMs:
+        data.createdAt instanceof Timestamp ? data.createdAt.toMillis() :
+        typeof data.createdAt === 'number' ? data.createdAt :
+        0
+    };
   });
+
+  list.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  state.courses = list;
+
+  renderCourses(snap);
+  gradesOnCourses?.();
+  document.dispatchEvent(new Event('courses:changed'));
+}, 300)); // 🔹 Espera 300ms entre renders consecutivos
+
 
   // 🔹 Más adelante, si todo bien, puedes volver a:
   // unsubscribeCourses = onSnapshot(query(ref, orderBy('createdAt','desc')), handler)
@@ -177,6 +180,9 @@ function renderCourses(snap){
     host.appendChild(item);
   });
 }
+
+
+
 
 /* ===== CRUD ===== */
 async function saveCourse(){

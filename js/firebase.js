@@ -21,4 +21,7 @@ setPersistence(auth, browserLocalPersistence).catch(() => { /* ignora navegadore
 
 // Firestore + cache offline (si está disponible)
 export const db = getFirestore(app);
-enableIndexedDbPersistence(db).catch(() => { /* p.ej. Safari privado o múltiples tabs en conflicto */ });
+setTimeout(() => {
+  enableIndexedDbPersistence(db).catch(() => {});
+}, 2000);
+
