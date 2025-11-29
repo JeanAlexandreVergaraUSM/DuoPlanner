@@ -7,7 +7,7 @@ Permite gestionar semestres, notas, asistencia, horarios, progreso y trabajar en
 
 ## 🌐 Demo en línea
 
-👉 [Abrir DuoPlanner](https://jeanalexandrevergarausm.github.io/DuoPlanner)
+👉 [Abrir DuoPlanner](https://jeanalexandrevergarausm.github.io/PartyPlanner)
 
 ---
 
